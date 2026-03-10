@@ -55,6 +55,29 @@ function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function formatStatusTimestamp(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "대기 중";
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true
+  }).format(date);
+}
+
 function isMonitorOnly() {
   return state.settings?.monitorOnly !== false;
 }
@@ -561,7 +584,7 @@ async function refreshAutomationStatus() {
 
   if (automation.running) {
     elements.automationStatus.textContent = `${accountLabel}${monitorLabel} / 브라우저 실행 중 / 최근 동기화 ${
-      automation.live?.updatedAt ?? automation.lastDraft?.at ?? "대기 중"
+      formatStatusTimestamp(automation.live?.updatedAt ?? automation.lastDraft?.at)
     }`;
     state.liveOverview = automation.live ?? state.liveOverview;
   } else if (automation.lastError) {
