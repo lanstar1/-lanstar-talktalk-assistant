@@ -336,7 +336,7 @@ export class TalkTalkWorker {
     await this.page.goto(this.resolveLiveDetailUrl(userId, account), {
       waitUntil: "domcontentloaded"
     });
-    await this.waitForLivePage(liveConfig);
+    await this.waitForLivePage(this.selectorConfig?.live ?? {});
     await this.tick({ forceSuggestion: true });
     return this.getLiveOverview();
   }
@@ -375,6 +375,8 @@ export class TalkTalkWorker {
     };
     const contextOptions = {
       serviceWorkers: "block",
+      locale: "ko-KR",
+      timezoneId: "Asia/Seoul",
       viewport: {
         width: 1280,
         height: 720

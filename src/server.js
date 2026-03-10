@@ -109,6 +109,7 @@ function getStorageStateStatus() {
 }
 
 function bootstrapPayload() {
+  const liveOnly = settings.monitorOnly !== false;
   return {
     ok: true,
     stats: store.stats,
@@ -121,7 +122,7 @@ function bootstrapPayload() {
     productCatalog: productCatalog.getStats(),
     automation: worker.getStatus(),
     live: worker.getLiveOverview(),
-    conversations: store.getConversationSummaries()
+    conversations: liveOnly ? [] : store.getConversationSummaries()
   };
 }
 
