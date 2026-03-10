@@ -17,6 +17,10 @@ function resolvePath(rootDir, targetPath) {
     : path.join(rootDir, targetPath);
 }
 
+function normalizeSnippet(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
 export class TalkTalkWorker {
   constructor({ rootDir, engine, getSettings }) {
     this.rootDir = rootDir;
@@ -269,11 +273,63 @@ export class TalkTalkWorker {
       }
     }
 
+    const purchaseHistory = [];
+    if (selectors.purchaseItemRows && selectors.purchaseItemName) {
+      const orderRows = this.page.locator(selectors.purchaseItemRows);
+      const orderCount = await orderRows.count();
+
+      for (let index = 0; index < orderCount; index += 1) {
+        const row = orderRows.nth(index);
+        const productName = await this.readOptionalText(row, selectors.purchaseItemName);
+        const status = await this.readOptionalText(row, selectors.purchaseItemStatus);
+        const orderDate = await this.readOptionalText(
+          row,
+          selectors.purchaseItemOrderDate
+        );
+        const orderNumber = await this.readOptionalText(
+          row,
+          selectors.purchaseItemOrderNumber
+        );
+
+        if (!productName && !status && !orderDate && !orderNumber) {
+          continue;
+        }
+
+        purchaseHistory.push({
+          주문날짜: orderDate,
+          주문번호: orderNumber,
+          상품목록: [
+            {
+              상품명: productName,
+              상태: status
+            }
+          ]
+        });
+      }
+    }
+
+    const productNames = purchaseHistory
+      .flatMap((order) => order.상품목록 ?? [])
+      .map((item) => normalizeSnippet(item.상품명))
+      .filter(Boolean);
+
+    if (!productNames.length && selectors.productTags) {
+      const tagNodes = this.page.locator(selectors.productTags);
+      const tagCount = await tagNodes.count();
+      for (let index = 0; index < tagCount; index += 1) {
+        const tagText = normalizeSnippet(await tagNodes.nth(index).textContent());
+        if (tagText) {
+          productNames.push(tagText);
+        }
+      }
+    }
+
     return {
       customerName: customerName || "고객",
       messages,
       pendingCustomerText: pendingCustomerMessages.join(" "),
-      purchaseHistory: []
+      purchaseHistory,
+      productNames: [...new Set(productNames)]
     };
   }
 
@@ -282,5 +338,19 @@ export class TalkTalkWorker {
     await input.click();
     await input.fill(replyText);
     await this.page.locator(selectors.sendButton).click();
+  }
+
+  async readOptionalText(scope, selector) {
+    if (!selector) {
+      return "";
+    }
+
+    try {
+      return normalizeSnippet(
+        await scope.locator(selector).first().textContent({ timeout: 800 })
+      );
+    } catch {
+      return "";
+    }
   }
 }

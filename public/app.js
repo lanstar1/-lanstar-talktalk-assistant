@@ -341,7 +341,8 @@ async function generateSuggestion() {
     requestBody = {
       customerName: state.manualConversation.customerName,
       purchaseHistory: state.manualConversation.purchaseHistory,
-      messages: state.manualConversation.messages
+      messages: state.manualConversation.messages,
+      productNames: state.manualConversation.productNames
     };
   } else if (state.currentConversationId) {
     requestBody = { conversationId: state.currentConversationId };

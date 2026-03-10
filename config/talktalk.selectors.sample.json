@@ -7,6 +7,12 @@
     "incomingRow": "[data-role='customer']",
     "outgoingRow": "[data-role='seller']",
     "messageText": "[class*='bubble'], [class*='message'], p",
+    "productTags": "",
+    "purchaseItemRows": "",
+    "purchaseItemName": "",
+    "purchaseItemStatus": "",
+    "purchaseItemOrderDate": "",
+    "purchaseItemOrderNumber": "",
     "input": "textarea, [contenteditable='true']",
     "sendButton": "role=button[name=\"전송\"]"
   }

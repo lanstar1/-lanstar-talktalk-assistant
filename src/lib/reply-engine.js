@@ -1,13 +1,15 @@
 import {
   buildSearchIndexParts,
   cleanAnswer,
+  extractModelIdentifiers,
   extractOrderStatuses,
   extractProductNames,
   normalizeText,
   normalizeWhitespace,
   scoreSearch,
   snippet,
-  summarizePurchaseHistory
+  summarizePurchaseHistory,
+  unique
 } from "./text-utils.js";
 
 const DEFAULT_LLM_SETTINGS = {
@@ -60,6 +62,15 @@ function llmReasonLabel(reason) {
   );
 }
 
+function hasSharedModel(left = [], right = []) {
+  if (!left.length || !right.length) {
+    return false;
+  }
+
+  const rightSet = new Set(right);
+  return left.some((item) => rightSet.has(item));
+}
+
 export class ReplyEngine {
   constructor({ examples, policies, llmClient = null, getSettings = null }) {
     this.examples = examples;
@@ -90,27 +101,49 @@ export class ReplyEngine {
     };
   }
 
-  findMatches(customerText, productNames = [], limit = 3) {
+  findMatches(customerText, productNames = [], modelIdentifiers = [], limit = 3) {
     const queryIndex = buildSearchIndexParts(customerText);
+    const normalizedProducts = productNames.map((name) => normalizeText(name));
 
-    return this.examples
+    const scored = this.examples
       .map((example) => {
+        const exampleSearchIndex =
+          example.searchIndex ??
+          buildSearchIndexParts(example.productName, example.customerText);
+        const exampleModels =
+          example.modelIdentifiers ??
+          extractModelIdentifiers(example.productName, example.customerText);
+        const exactModelMatch = hasSharedModel(modelIdentifiers, exampleModels);
         const productBonus =
-          productNames.length &&
-          productNames.some((name) =>
-            normalizeText(example.productName).includes(normalizeText(name))
+          normalizedProducts.length &&
+          normalizedProducts.some((name) =>
+            normalizeText(example.productName).includes(name)
           )
-            ? 0.08
+            ? 0.12
             : 0;
+        const modelBonus = exactModelMatch ? 0.45 : 0;
 
         return {
           example,
-          score: scoreSearch(queryIndex, example.searchIndex, productBonus)
+          exampleModels,
+          exactModelMatch,
+          score: scoreSearch(queryIndex, exampleSearchIndex, productBonus + modelBonus)
         };
       })
-      .filter((item) => item.score > 0.12)
-      .sort((left, right) => right.score - left.score)
-      .slice(0, limit);
+      .filter((item) => item.score > 0.12);
+
+    if (modelIdentifiers.length) {
+      const exactMatches = scored.filter((item) => item.exactModelMatch);
+      if (exactMatches.length) {
+        return exactMatches
+          .sort((left, right) => right.score - left.score)
+          .slice(0, limit);
+      }
+
+      return [];
+    }
+
+    return scored.sort((left, right) => right.score - left.score).slice(0, limit);
   }
 
   detectFlags(customerText) {
@@ -275,7 +308,47 @@ export class ReplyEngine {
     return this.policies.fallback;
   }
 
-  buildBaseSuggestion({ customerName = "고객", purchaseHistory = [], messages = [] }) {
+  needsModelConfirmation(customerText, modelIdentifiers = [], policyMatch = null) {
+    if (!customerText || modelIdentifiers.length || policyMatch) {
+      return false;
+    }
+
+    const normalized = normalizeText(customerText);
+    const technicalKeywords = [
+      "안되",
+      "오류",
+      "연결",
+      "인식",
+      "설치",
+      "화면",
+      "출력",
+      "입력",
+      "소리",
+      "불량",
+      "고장",
+      "작동",
+      "호환",
+      "드라이버",
+      "깜빡"
+    ];
+
+    return technicalKeywords.some((keyword) => normalized.includes(keyword));
+  }
+
+  buildModelRequestReply() {
+    return [
+      "문의 내용만으로는 정확한 제품 모델명을 확인하기 어려워 우선 모델명 확인이 필요합니다.",
+      "구매하신 제품의 모델명 또는 주문내역상 상품명을 알려주시면 해당 모델 기준 상담 이력부터 먼저 확인한 뒤 안내드리겠습니다.",
+      "예: LS-UH319-W, LS-UC202"
+    ].join("\n");
+  }
+
+  buildBaseSuggestion({
+    customerName = "고객",
+    purchaseHistory = [],
+    messages = [],
+    productNames: inputProductNames = []
+  }) {
     const conversationMessages = messages.map((message) => ({
       role: message.role,
       text: normalizeWhitespace(message.text ?? "")
@@ -292,17 +365,46 @@ export class ReplyEngine {
     }
 
     const customerText = pendingCustomerMessages.join(" ").trim();
-    const productNames = extractProductNames(purchaseHistory);
+    const productNames = unique([
+      ...extractProductNames(purchaseHistory),
+      ...inputProductNames.map((name) => normalizeWhitespace(name))
+    ]);
+    const modelIdentifiers = extractModelIdentifiers(
+      productNames,
+      conversationMessages.map((message) => message.text)
+    );
     const flags = this.detectFlags(customerText);
     const policyMatch = this.matchPolicy({ customerText, purchaseHistory });
-    const matches = customerText ? this.findMatches(customerText, productNames) : [];
+    const needsModelConfirmation = this.needsModelConfirmation(
+      customerText,
+      modelIdentifiers,
+      policyMatch
+    );
+    const matches =
+      customerText && !needsModelConfirmation
+        ? this.findMatches(customerText, productNames, modelIdentifiers)
+        : [];
 
     let body;
     let evidence;
     let confidence;
     let generationSource;
 
-    if (policyMatch) {
+    if (needsModelConfirmation) {
+      body = this.buildModelRequestReply();
+      evidence = [
+        {
+          id: "policy:model_required",
+          source: "모델명 확인 필요",
+          productName: "",
+          score: 1,
+          customerText: "기술문의 / 모델명 미확인",
+          answerText: body
+        }
+      ];
+      confidence = 0.93;
+      generationSource = "model_required";
+    } else if (policyMatch) {
       body = policyMatch.reply;
       evidence = policyMatch.evidence;
       confidence = 0.98;
@@ -321,6 +423,7 @@ export class ReplyEngine {
 
     const replyText = maybeAddGreetingAndClosing(body, this.policies);
     const canAutoSend =
+      generationSource !== "model_required" &&
       confidence >= 0.8 &&
       !flags.some((flag) => flag.reviewOnly) &&
       !(policyMatch && policyMatch.autoEligible === false);
@@ -330,6 +433,7 @@ export class ReplyEngine {
         customerName,
         customerText,
         productNames,
+        modelIdentifiers,
         replyText,
         evidence,
         flags,
@@ -351,8 +455,10 @@ export class ReplyEngine {
         messages: conversationMessages,
         customerText,
         productNames,
+        modelIdentifiers,
         flags,
         policyMatch,
+        needsModelConfirmation,
         matches,
         confidence,
         body,
@@ -369,7 +475,12 @@ export class ReplyEngine {
       return null;
     }
 
-    if (!context.customerText || suggestion.policyRule) {
+    if (
+      !context.customerText ||
+      suggestion.policyRule ||
+      context.needsModelConfirmation ||
+      suggestion.generationSource === "model_required"
+    ) {
       return null;
     }
 
@@ -421,6 +532,7 @@ export class ReplyEngine {
       customerName: payload.customerName ?? suggestion.customerName,
       customerText: suggestion.customerText,
       productNames: suggestion.productNames,
+      modelIdentifiers: suggestion.modelIdentifiers,
       messages: context.messages,
       purchaseSummary: summarizePurchaseHistory(payload.purchaseHistory ?? []),
       baseReplyText: suggestion.replyText,

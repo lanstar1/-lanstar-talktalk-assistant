@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   buildSearchIndexParts,
+  extractModelIdentifiers,
   extractPendingCustomerMessages,
   extractProductNames,
   isActionableCustomerText,
@@ -17,10 +18,15 @@ import {
 
 function createRetrievalExample(example) {
   const searchIndex = buildSearchIndexParts(example.customerText);
+  const modelIdentifiers = extractModelIdentifiers(
+    example.productName,
+    example.customerText
+  );
 
   return {
     ...example,
-    searchIndex
+    searchIndex,
+    modelIdentifiers
   };
 }
 

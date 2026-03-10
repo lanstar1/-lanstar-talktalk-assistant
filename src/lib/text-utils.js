@@ -9,6 +9,25 @@ const ORDER_STATUS_PREFIXES = [
   "수거중",
   "미입금취소"
 ];
+const MODEL_STOPWORDS = new Set([
+  "USB20",
+  "USB30",
+  "USB31",
+  "USB32",
+  "HDMI14",
+  "HDMI20",
+  "HDMI21",
+  "DP12",
+  "DP14",
+  "1080P",
+  "1440P",
+  "2160P",
+  "60HZ",
+  "120HZ",
+  "240HZ",
+  "HDR10",
+  "UHD60"
+]);
 
 export function normalizeText(value = "") {
   return String(value)
@@ -145,6 +164,56 @@ export function normalizeWhitespace(value = "") {
     .replace(/\u00a0/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function canonicalizeModelIdentifier(value = "") {
+  return normalizeWhitespace(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function isLikelyModelIdentifier(identifier = "") {
+  if (identifier.length < 5) {
+    return false;
+  }
+
+  if (!/[A-Z]/.test(identifier) || !/\d/.test(identifier)) {
+    return false;
+  }
+
+  if (MODEL_STOPWORDS.has(identifier)) {
+    return false;
+  }
+
+  if (identifier.startsWith("LS") && identifier.length >= 6) {
+    return true;
+  }
+
+  return /^[A-Z]{1,5}\d{2,}[A-Z0-9]{0,6}$/.test(identifier);
+}
+
+export function extractModelIdentifiers(...values) {
+  const identifiers = new Set();
+
+  for (const value of values.flat()) {
+    const normalized = normalizeWhitespace(value);
+    if (!normalized) {
+      continue;
+    }
+
+    const candidates = normalized.match(/[A-Za-z0-9][A-Za-z0-9.-]{3,}/g) ?? [];
+    for (const candidate of candidates) {
+      const identifier = canonicalizeModelIdentifier(candidate);
+      if (!isLikelyModelIdentifier(identifier)) {
+        continue;
+      }
+
+      identifiers.add(identifier);
+      if (identifier.startsWith("LS") && identifier.length > 4) {
+        identifiers.add(identifier.slice(2));
+      }
+    }
+  }
+
+  return [...identifiers];
 }
 
 export function extractPendingCustomerMessages(messages = []) {

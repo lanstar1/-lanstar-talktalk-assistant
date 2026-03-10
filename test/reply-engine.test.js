@@ -58,6 +58,52 @@ test("상품 Q&A와 유사한 문의는 기존 답변을 재사용한다", () =>
   assert.match(suggestion.replyText, /자동으로 잠기는 구조/);
 });
 
+test("주문내역 모델명과 동일한 상담이력을 우선 사용한다", () => {
+  const engine = new ReplyEngine({
+    examples: [
+      {
+        id: "history:uh319w",
+        source: "상담이력",
+        productName: "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터",
+        customerText: "LS-UH319-W 제품 사용 중 화면이 안 나와요",
+        answerText: "LS-UH319-W 기준으로 드라이버 설치 여부와 USB 포트 전원 상태를 먼저 확인 부탁드립니다.",
+        orderSummary: ""
+      },
+      {
+        id: "history:uc202",
+        source: "상담이력",
+        productName: "랜스타 LS-UC202 USB-C 컨버터",
+        customerText: "LS-UC202 제품 노트북 인식이 안 됩니다",
+        answerText: "LS-UC202 기준으로 C타입 포트와 케이블 연결 상태를 확인 부탁드립니다.",
+        orderSummary: ""
+      }
+    ],
+    policies
+  });
+  const suggestion = engine.suggestReply({
+    purchaseHistory: [
+      {
+        주문번호: "202603100001",
+        주문날짜: "2026-03-10",
+        상품목록: [
+          {
+            상품명: "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터",
+            상태: "배송완료"
+          }
+        ]
+      }
+    ],
+    messages: [{ role: "customer", text: "모니터 연결했는데 화면이 안 나와요" }]
+  });
+
+  assert.equal(suggestion.generationSource, "retrieval");
+  assert.match(suggestion.replyText, /LS-UH319-W 기준/);
+  assert.equal(
+    suggestion.evidence[0].productName,
+    "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터"
+  );
+});
+
 test("배송 문의는 주문 상태 정책을 우선 적용한다", () => {
   const engine = new ReplyEngine({ examples, policies });
   const suggestion = engine.suggestReply({
@@ -71,6 +117,23 @@ test("배송 문의는 주문 상태 정책을 우선 적용한다", () => {
 
   assert.equal(suggestion.policyRule, "shipping");
   assert.match(suggestion.replyText, /결제완료 상태/);
+});
+
+test("기술문의에 모델명을 확인할 수 없으면 먼저 모델명을 요청한다", () => {
+  const engine = new ReplyEngine({ examples, policies });
+  const suggestion = engine.suggestReply({
+    purchaseHistory: [],
+    messages: [
+      {
+        role: "customer",
+        text: "모니터 연결했는데 화면이 안 나옵니다. 인식도 안 돼요."
+      }
+    ]
+  });
+
+  assert.equal(suggestion.generationSource, "model_required");
+  assert.equal(suggestion.canAutoSend, false);
+  assert.match(suggestion.replyText, /모델명/);
 });
 
 test("기존 이력이 약하면 LLM으로 답변을 보강한다", async () => {
@@ -113,11 +176,23 @@ test("기존 이력이 약하면 LLM으로 답변을 보강한다", async () => 
     })
   });
   const suggestion = await engine.suggestReplyEnhanced({
-    purchaseHistory: [],
+    purchaseHistory: [
+      {
+        주문번호: "202603100003",
+        주문날짜: "2026-03-10",
+        상품목록: [
+          {
+            상품명: "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터",
+            상태: "배송완료"
+          }
+        ]
+      }
+    ],
     messages: [
       {
         role: "customer",
-        text: "모니터 연결했는데 화면이 안 나오고 인식이 안됩니다. 어떻게 확인하면 될까요?"
+        text:
+          "LS-UH319-W 사용 중인데 모니터 연결했을 때 화면이 안 나오고 인식이 안 됩니다. 어떻게 확인하면 될까요?"
       }
     ]
   });
@@ -126,4 +201,83 @@ test("기존 이력이 약하면 LLM으로 답변을 보강한다", async () => 
   assert.equal(suggestion.llm.used, true);
   assert.match(suggestion.replyText, /연결 포트 변경/);
   assert.equal(suggestion.canAutoSend, false);
+});
+
+test("동일 모델 상담 이력이 없으면 다른 모델 대신 LLM이 보강한다", async () => {
+  const llmClient = {
+    isAvailable() {
+      return true;
+    },
+    getStatus() {
+      return {
+        enabled: true,
+        available: true,
+        provider: "mock",
+        model: "mock-1",
+        baseUrl: "http://mock"
+      };
+    },
+    async generateReplyEnhancement() {
+      return {
+        replyText:
+          "LS-UH319-W 기준 상담 이력이 부족하여 우선 드라이버 재설치와 다른 USB 포트 연결을 확인 부탁드립니다. 계속 동일하면 모델명과 사용 PC 환경을 함께 남겨주시면 추가 확인해 드리겠습니다.",
+        needsReview: false,
+        reasoning: "동일 모델 근거가 부족해 일반 점검 절차를 보강했습니다.",
+        missingInformation: ["사용 PC 환경"]
+      };
+    }
+  };
+
+  const engine = new ReplyEngine({
+    examples: [
+      {
+        id: "history:uc202",
+        source: "상담이력",
+        productName: "랜스타 LS-UC202 USB-C 컨버터",
+        customerText: "LS-UC202 제품 인식이 안 됩니다",
+        answerText: "LS-UC202 기준으로 케이블 상태를 확인 부탁드립니다.",
+        orderSummary: ""
+      }
+    ],
+    policies,
+    llmClient,
+    getSettings: () => ({
+      llm: {
+        enabled: true,
+        enhanceWhenConfidenceBelow: 0.78,
+        weakAnswerLength: 140,
+        maxEvidenceCount: 4,
+        allowAutoSend: false
+      }
+    })
+  });
+
+  const suggestion = await engine.suggestReplyEnhanced({
+    purchaseHistory: [
+      {
+        주문번호: "202603100002",
+        주문날짜: "2026-03-10",
+        상품목록: [
+          {
+            상품명: "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터",
+            상태: "배송완료"
+          }
+        ]
+      }
+    ],
+    messages: [
+      {
+        role: "customer",
+        text: "모니터 연결했는데 화면이 안 나오고 인식이 안 됩니다."
+      }
+    ]
+  });
+
+  assert.equal(suggestion.generationSource, "llm_hybrid");
+  assert.equal(suggestion.llm.used, true);
+  assert.match(suggestion.replyText, /LS-UH319-W 기준/);
+  assert.equal(
+    suggestion.evidence.some((item) => /LS-UC202/.test(item.productName ?? "")),
+    false
+  );
 });

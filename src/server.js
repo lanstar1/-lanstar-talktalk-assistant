@@ -180,7 +180,8 @@ const server = http.createServer(async (request, response) => {
       const payload = {
         customerName: body.customerName ?? conversation?.customerName ?? "고객",
         purchaseHistory: body.purchaseHistory ?? conversation?.purchaseHistory ?? [],
-        messages: body.messages ?? conversation?.messages ?? []
+        messages: body.messages ?? conversation?.messages ?? [],
+        productNames: body.productNames ?? conversation?.productNames ?? []
       };
 
       const suggestion = await engine.suggestReplyEnhanced(payload);
