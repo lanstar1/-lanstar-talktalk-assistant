@@ -10,6 +10,7 @@ const state = {
   settings: null,
   activeAccount: null,
   pollTimer: null,
+  reviewedDraftSignature: "",
   lastConversationListSignature: "",
   lastThreadSignature: "",
   lastSuggestionSignature: ""
@@ -31,8 +32,10 @@ const elements = {
   productTags: document.querySelector("#productTags"),
   thread: document.querySelector("#thread"),
   generateButton: document.querySelector("#generateButton"),
+  reviewButton: document.querySelector("#reviewButton"),
   sendButton: document.querySelector("#sendButton"),
   draftReply: document.querySelector("#draftReply"),
+  reviewStatus: document.querySelector("#reviewStatus"),
   flagList: document.querySelector("#flagList"),
   confidenceBar: document.querySelector("#confidenceBar"),
   confidenceText: document.querySelector("#confidenceText"),
@@ -170,6 +173,7 @@ function setConversationSource(conversations) {
 function clearConversationSource() {
   state.currentConversationId = null;
   state.currentConversation = null;
+  state.reviewedDraftSignature = "";
   state.lastConversationListSignature = "";
   setConversationSource([]);
   elements.customerName.textContent = "실시간 대화를 기다리는 중";
@@ -178,6 +182,26 @@ function clearConversationSource() {
   elements.thread.innerHTML =
     '<p class="empty-text">실시간 상담을 선택하면 메시지와 추천 답변이 표시됩니다.</p>';
   resetSuggestionView();
+}
+
+function getCurrentDraftSignature() {
+  return `${state.currentConversationId ?? "none"}:${elements.draftReply.value.trim()}`;
+}
+
+function updateReviewButtonState() {
+  const hasDraft = Boolean(elements.draftReply.value.trim());
+  const reviewed =
+    hasDraft &&
+    state.reviewedDraftSignature &&
+    state.reviewedDraftSignature === getCurrentDraftSignature();
+
+  elements.reviewButton.disabled = !hasDraft;
+  elements.reviewButton.textContent = reviewed ? "검토 완료됨" : "검토 완료";
+  elements.reviewStatus.textContent = hasDraft
+    ? reviewed
+      ? "운영자 검토 완료. 고객 전송은 계속 차단된 상태입니다."
+      : "초안을 확인하고 필요하면 직접 수정한 뒤 검토 완료를 누르세요."
+    : "초안이 생성되면 내용을 확인하고 필요시 직접 수정한 뒤 검토 완료를 누르세요.";
 }
 
 function renderConversationList(conversations) {
@@ -274,6 +298,7 @@ function renderThread(conversation) {
 
 function resetSuggestionView() {
   state.currentSuggestion = null;
+  state.reviewedDraftSignature = "";
   state.lastSuggestionSignature = "";
   elements.draftReply.value = "";
   renderFlags([]);
@@ -281,6 +306,7 @@ function resetSuggestionView() {
   elements.confidenceBar.style.width = "0%";
   elements.confidenceText.textContent = "신뢰도 -";
   renderLlmStatus(state.settings?.llmStatus);
+  updateReviewButtonState();
 }
 
 function updateSendButtonState() {
@@ -349,6 +375,7 @@ function renderSuggestion(suggestion) {
   }
   state.lastSuggestionSignature = signature;
   state.currentSuggestion = suggestion;
+  state.reviewedDraftSignature = "";
   elements.draftReply.value = suggestion.replyText;
   renderFlags(suggestion.flags);
   renderEvidence(suggestion.evidence);
@@ -367,6 +394,7 @@ function renderSuggestion(suggestion) {
     suggestion.confidence * 100
   )}% / ${sourceLabel} / ${suggestion.canAutoSend ? "자동 발송 가능" : "검토 필요"}`;
   renderLlmStatus(state.settings?.llmStatus ?? suggestion.llm, suggestion);
+  updateReviewButtonState();
 }
 
 function applyFilter(query) {
@@ -540,6 +568,17 @@ async function sendDraft() {
     "테스트 모드에서는 고객에게 실제 답변을 전송할 수 없습니다.";
 }
 
+async function markDraftReviewed() {
+  if (!elements.draftReply.value.trim()) {
+    return;
+  }
+
+  state.reviewedDraftSignature = getCurrentDraftSignature();
+  updateReviewButtonState();
+  elements.automationStatus.textContent =
+    "현재 초안을 운영자 검토 완료로 표시했습니다. 고객 전송은 차단 상태입니다.";
+}
+
 async function copyDraft() {
   if (!elements.draftReply.value) {
     return;
@@ -585,6 +624,7 @@ async function bootstrap() {
   elements.modeSelect.disabled = isMonitorOnly();
   renderLlmStatus(payload.llmStatus);
   updateSendButtonState();
+  updateReviewButtonState();
   startPolling();
 
   await refreshAutomationStatus();
@@ -604,10 +644,12 @@ elements.searchInput.addEventListener("input", (event) => {
 elements.accountSelect.addEventListener("change", saveActiveAccount);
 elements.modeSelect.addEventListener("change", saveMode);
 elements.generateButton.addEventListener("click", generateSuggestion);
+elements.reviewButton.addEventListener("click", markDraftReviewed);
 elements.sendButton.addEventListener("click", sendDraft);
 elements.startAutomationButton.addEventListener("click", startAutomation);
 elements.stopAutomationButton.addEventListener("click", stopAutomation);
 elements.copyButton.addEventListener("click", copyDraft);
+elements.draftReply.addEventListener("input", updateReviewButtonState);
 
 bootstrap().catch((error) => {
   elements.automationStatus.textContent = error.message;

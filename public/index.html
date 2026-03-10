@@ -88,6 +88,7 @@
                 </div>
                 <div class="button-row">
                   <button id="generateButton" class="button primary">초안 생성</button>
+                  <button id="reviewButton" class="button ghost">검토 완료</button>
                   <button id="sendButton" class="button strong">검토 후 전송</button>
                 </div>
               </div>
@@ -101,6 +102,9 @@
                 실시간 모니터링 테스트 중에는 고객 전송이 비활성화되며, 새 문의에 대한 초안만 자동 갱신됩니다.
               </p>
               <textarea id="draftReply" class="draft-textarea" placeholder="추천 답변이 여기에 표시됩니다."></textarea>
+              <p id="reviewStatus" class="subtle small">
+                초안이 생성되면 내용을 확인하고 필요시 직접 수정한 뒤 검토 완료를 누르세요.
+              </p>
               <div id="flagList" class="flag-list"></div>
             </section>
 
