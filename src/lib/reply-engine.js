@@ -41,15 +41,24 @@ function maybeAddGreetingAndClosing(body, policies) {
   const greeting = policies.greeting ?? "";
   const closing = policies.closing ?? "";
   const normalizedBody = normalizeText(cleaned);
+  const hasGreeting =
+    (normalizeText(greeting) &&
+      normalizedBody.startsWith(normalizeText(greeting))) ||
+    normalizedBody.startsWith(normalizeText("안녕하세요")) ||
+    normalizedBody.startsWith(normalizeText("안녕하십니까"));
+  const hasClosing =
+    (normalizeText(closing) &&
+      normalizedBody.endsWith(normalizeText(closing))) ||
+    normalizedBody.endsWith(normalizeText("감사합니다.")) ||
+    normalizedBody.endsWith(normalizeText("감사합니다"));
 
-  if (
-    normalizeText(greeting) &&
-    normalizedBody.startsWith(normalizeText(greeting))
-  ) {
-    return cleaned;
-  }
-
-  return [greeting, cleaned, closing].filter(Boolean).join("\n\n");
+  return [
+    hasGreeting ? "" : greeting,
+    cleaned,
+    hasClosing ? "" : closing
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function llmReasonLabel(reason) {

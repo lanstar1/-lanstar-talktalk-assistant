@@ -313,6 +313,61 @@ test("기존 이력이 약하면 LLM으로 답변을 보강한다", async () => 
   assert.equal(suggestion.canAutoSend, false);
 });
 
+test("LLM 답변에 인사말과 마무리가 있어도 중복으로 덧붙이지 않는다", async () => {
+  const llmClient = {
+    isAvailable() {
+      return true;
+    },
+    getStatus() {
+      return {
+        enabled: true,
+        available: true,
+        provider: "mock",
+        model: "mock-1",
+        baseUrl: "http://mock"
+      };
+    },
+    async generateReplyEnhancement() {
+      return {
+        replyText:
+          "안녕하세요, 고객님. 랜스타입니다.\n\n우선 케이블 연결 상태와 드라이버 설치 여부를 확인 부탁드립니다.\n\n감사합니다.",
+        needsReview: false,
+        reasoning: "LLM이 자체 인사말과 마무리를 포함했습니다.",
+        missingInformation: []
+      };
+    }
+  };
+
+  const engine = new ReplyEngine({
+    examples,
+    policies,
+    llmClient,
+    getSettings: () => ({
+      llm: {
+        enabled: true,
+        enhanceWhenConfidenceBelow: 0.78,
+        weakAnswerLength: 140,
+        maxEvidenceCount: 4,
+        allowAutoSend: false
+      }
+    })
+  });
+
+  const suggestion = await engine.suggestReplyEnhanced({
+    productNames: ["LS-UT999"],
+    messages: [
+      {
+        role: "customer",
+        text: "LS-UT999 제품 연결이 안 됩니다. 해결 방법이 있을까요?"
+      }
+    ]
+  });
+
+  assert.equal(suggestion.generationSource, "llm_hybrid");
+  assert.equal((suggestion.replyText.match(/안녕하세요/g) ?? []).length, 1);
+  assert.equal((suggestion.replyText.match(/감사합니다/g) ?? []).length, 1);
+});
+
 test("동일 모델 상담 이력이 없으면 다른 모델 대신 LLM이 보강한다", async () => {
   const llmClient = {
     isAvailable() {
