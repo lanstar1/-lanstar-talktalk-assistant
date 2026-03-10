@@ -107,6 +107,29 @@ function buildManualConversation() {
   };
 }
 
+function markManualConversationDirty() {
+  if (!state.manualConversation) {
+    return;
+  }
+
+  elements.manualTestStatus.textContent =
+    "테스트 문의 입력값이 변경되었습니다. 초안 생성을 누르면 새 질문 기준으로 다시 생성합니다.";
+}
+
+function syncManualConversationFromForm() {
+  const question = elements.manualMessage.value.trim();
+  if (!question) {
+    elements.manualTestStatus.textContent = "테스트할 고객 문의를 먼저 입력해 주세요.";
+    elements.manualMessage.focus();
+    return false;
+  }
+
+  state.manualConversation = buildManualConversation();
+  renderThread(state.manualConversation);
+  updateSendButtonState();
+  return true;
+}
+
 async function request(url, options = {}) {
   const response = await fetch(url, {
     headers: {
@@ -343,6 +366,10 @@ async function selectConversation(conversationId) {
 async function generateSuggestion() {
   let requestBody = null;
   if (state.manualConversation) {
+    if (!syncManualConversationFromForm()) {
+      return;
+    }
+
     requestBody = {
       customerName: state.manualConversation.customerName,
       purchaseHistory: state.manualConversation.purchaseHistory,
@@ -580,6 +607,18 @@ elements.sendButton.addEventListener("click", sendDraft);
 elements.startAutomationButton.addEventListener("click", startAutomation);
 elements.stopAutomationButton.addEventListener("click", stopAutomation);
 elements.copyButton.addEventListener("click", copyDraft);
+[
+  elements.manualCustomerName,
+  elements.manualMessage,
+  elements.manualProductName,
+  elements.manualOrderStatus,
+  elements.manualOrderDate,
+  elements.manualOrderNumber
+].forEach((input) => {
+  input.addEventListener("input", markManualConversationDirty);
+  input.addEventListener("change", markManualConversationDirty);
+});
+elements.manualHasOrder.addEventListener("change", markManualConversationDirty);
 
 bootstrap().catch((error) => {
   elements.automationStatus.textContent = error.message;

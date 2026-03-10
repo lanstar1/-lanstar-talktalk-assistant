@@ -257,6 +257,9 @@ function buildTechnicalRetrievalReply({
 }) {
   let opening = "문의주신 증상으로 보아 우선 연결 상태와 설치 상태를 먼저 점검해 보시는 것이 좋습니다.";
   const modelReference = productProfileReference(productProfile, productNames);
+  const resolutionOnlyIssue =
+    includesSignal(supportSignals, ["resolution"]) &&
+    !includesSignal(supportSignals, ["display_no_signal", "recognition", "power"]);
   if (
     includesSignal(supportSignals, ["display_no_signal"]) &&
     includesSignal(supportSignals, ["recognition"])
@@ -266,6 +269,8 @@ function buildTechnicalRetrievalReply({
     opening = "제품 연결 후 모니터 화면이 출력되지 않는 증상으로 확인됩니다.";
   } else if (includesSignal(supportSignals, ["recognition"])) {
     opening = "제품 연결 후 장치 인식이 원활하지 않은 증상으로 확인됩니다.";
+  } else if (resolutionOnlyIssue) {
+    opening = "해상도 또는 화면 배율 관련 증상으로 확인됩니다.";
   } else if (includesSignal(supportSignals, ["driver"])) {
     opening = "설치 또는 드라이버 관련 증상으로 확인됩니다.";
   }
@@ -283,9 +288,18 @@ function buildTechnicalRetrievalReply({
     }
   };
 
-  pushStep(
-    "제품과 모니터, 케이블 연결 상태를 다시 확인하시고 가능하면 다른 케이블 또는 다른 포트로도 동일한지 먼저 확인 부탁드립니다."
-  );
+  if (resolutionOnlyIssue) {
+    pushStep(
+      "Windows 디스플레이 설정에서 해상도가 권장값으로 선택되어 있는지 먼저 확인 부탁드립니다."
+    );
+    pushStep(
+      "배율 및 레이아웃 설정이 100% 또는 권장 배율로 잡혀 있는지도 함께 확인 부탁드립니다."
+    );
+  } else {
+    pushStep(
+      "제품과 모니터, 케이블 연결 상태를 다시 확인하시고 가능하면 다른 케이블 또는 다른 포트로도 동일한지 먼저 확인 부탁드립니다."
+    );
+  }
 
   if (productContext.requiresDriver || actionHints.includes("driver")) {
     pushStep(
@@ -317,6 +331,12 @@ function buildTechnicalRetrievalReply({
   ) {
     pushStep(
       "PC의 디스플레이 설정 또는 장치관리자에서 추가 모니터나 USB 디스플레이 장치가 인식되는지도 확인 부탁드립니다."
+    );
+  }
+
+  if (resolutionOnlyIssue) {
+    pushStep(
+      "디스플레이 고급 설정에서 해상도와 주사율이 비정상적으로 낮게 잡혀 있지 않은지도 확인 부탁드립니다."
     );
   }
 
