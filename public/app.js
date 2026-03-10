@@ -3,6 +3,8 @@ const state = {
   filteredConversations: [],
   currentConversationId: null,
   currentConversation: null,
+  manualConversation: null,
+  previousConversationId: null,
   currentSuggestion: null,
   settings: null,
   activeAccount: null
@@ -12,6 +14,16 @@ const elements = {
   metrics: document.querySelector("#metrics"),
   llmStatusText: document.querySelector("#llmStatusText"),
   searchInput: document.querySelector("#searchInput"),
+  manualCustomerName: document.querySelector("#manualCustomerName"),
+  manualMessage: document.querySelector("#manualMessage"),
+  manualHasOrder: document.querySelector("#manualHasOrder"),
+  manualProductName: document.querySelector("#manualProductName"),
+  manualOrderStatus: document.querySelector("#manualOrderStatus"),
+  manualOrderDate: document.querySelector("#manualOrderDate"),
+  manualOrderNumber: document.querySelector("#manualOrderNumber"),
+  applyManualTestButton: document.querySelector("#applyManualTestButton"),
+  resetManualTestButton: document.querySelector("#resetManualTestButton"),
+  manualTestStatus: document.querySelector("#manualTestStatus"),
   accountSelect: document.querySelector("#accountSelect"),
   modeSelect: document.querySelector("#modeSelect"),
   automationStatus: document.querySelector("#automationStatus"),
@@ -33,6 +45,67 @@ const elements = {
   copyButton: document.querySelector("#copyButton"),
   conversationItemTemplate: document.querySelector("#conversationItemTemplate")
 };
+
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function createManualPurchaseHistory() {
+  if (!elements.manualHasOrder.checked) {
+    return [];
+  }
+
+  const productName = elements.manualProductName.value.trim() || "테스트 상품";
+  const orderStatus = elements.manualOrderStatus.value || "결제완료";
+  const orderDate = elements.manualOrderDate.value || todayString();
+  const orderNumber = elements.manualOrderNumber.value.trim() || "202603100001";
+
+  return [
+    {
+      주문날짜: orderDate,
+      주문번호: orderNumber,
+      상품목록: [
+        {
+          상품명: productName,
+          상태: orderStatus
+        }
+      ]
+    }
+  ];
+}
+
+function buildManualConversation() {
+  const customerName = elements.manualCustomerName.value.trim() || "테스트 고객";
+  const question = elements.manualMessage.value.trim();
+  const purchaseHistory = createManualPurchaseHistory();
+  const productName =
+    elements.manualProductName.value.trim() ||
+    purchaseHistory[0]?.상품목록?.[0]?.상품명 ||
+    "";
+  const productNames = productName ? [productName] : [];
+  const latestOrder = purchaseHistory[0];
+  const orderSummary = latestOrder
+    ? `${latestOrder.주문날짜} / ${latestOrder.주문번호} / ${productName || "테스트 상품"}`
+    : "테스트 문의 / 주문 내역 없음";
+
+  return {
+    id: "manual:test",
+    isManual: true,
+    customerName,
+    purchaseHistory,
+    orderSummary,
+    latestOrderDate: latestOrder?.주문날짜 ?? "",
+    productNames,
+    messages: [
+      {
+        role: "customer",
+        text: question
+      }
+    ],
+    awaitingReply: true,
+    preview: question
+  };
+}
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -169,6 +242,24 @@ function renderThread(conversation) {
   }
 }
 
+function resetSuggestionView() {
+  state.currentSuggestion = null;
+  elements.draftReply.value = "";
+  renderFlags([]);
+  renderEvidence([]);
+  elements.confidenceBar.style.width = "0%";
+  elements.confidenceText.textContent = "신뢰도 -";
+  renderLlmStatus(state.settings?.llmStatus);
+}
+
+function updateSendButtonState() {
+  const disabled = Boolean(state.manualConversation);
+  elements.sendButton.disabled = disabled;
+  elements.sendButton.title = disabled
+    ? "테스트 문의에서는 실제 전송이 비활성화됩니다."
+    : "";
+}
+
 function renderFlags(flags = []) {
   elements.flagList.innerHTML = "";
   if (!flags.length) {
@@ -230,27 +321,39 @@ function renderSuggestion(suggestion) {
 }
 
 async function selectConversation(conversationId) {
+  state.manualConversation = null;
+  state.previousConversationId = conversationId;
   state.currentConversationId = conversationId;
   renderConversationList(state.filteredConversations);
 
   const payload = await request(`/api/conversations/${encodeURIComponent(conversationId)}`);
   state.currentConversation = payload.conversation;
   renderThread(payload.conversation);
-  elements.draftReply.value = "";
-  renderFlags([]);
-  renderEvidence([]);
-  elements.confidenceBar.style.width = "0%";
-  elements.confidenceText.textContent = "신뢰도 -";
+  resetSuggestionView();
+  updateSendButtonState();
+  elements.manualTestStatus.textContent =
+    "질문을 입력한 뒤 테스트 초안 생성을 누르세요.";
 }
 
 async function generateSuggestion() {
-  if (!state.currentConversationId) {
+  let requestBody = null;
+  if (state.manualConversation) {
+    requestBody = {
+      customerName: state.manualConversation.customerName,
+      purchaseHistory: state.manualConversation.purchaseHistory,
+      messages: state.manualConversation.messages
+    };
+  } else if (state.currentConversationId) {
+    requestBody = { conversationId: state.currentConversationId };
+  }
+
+  if (!requestBody) {
     return;
   }
 
   const payload = await request("/api/suggest", {
     method: "POST",
-    body: JSON.stringify({ conversationId: state.currentConversationId })
+    body: JSON.stringify(requestBody)
   });
   renderSuggestion(payload.suggestion);
 }
@@ -327,6 +430,12 @@ async function stopAutomation() {
 }
 
 async function sendDraft() {
+  if (state.manualConversation) {
+    elements.automationStatus.textContent =
+      "테스트 문의에서는 실제 전송이 비활성화됩니다.";
+    return;
+  }
+
   const replyText = elements.draftReply.value.trim();
   if (!replyText) {
     elements.automationStatus.textContent = "전송할 답변이 없습니다.";
@@ -343,6 +452,64 @@ async function sendDraft() {
   } catch (error) {
     elements.automationStatus.textContent = error.message;
   }
+}
+
+async function applyManualTest() {
+  const question = elements.manualMessage.value.trim();
+  if (!question) {
+    elements.manualTestStatus.textContent = "테스트할 고객 문의를 먼저 입력해 주세요.";
+    elements.manualMessage.focus();
+    return;
+  }
+
+  if (state.currentConversationId) {
+    state.previousConversationId = state.currentConversationId;
+  }
+
+  state.currentConversationId = null;
+  state.currentConversation = null;
+  state.manualConversation = buildManualConversation();
+  renderConversationList(state.filteredConversations);
+  renderThread(state.manualConversation);
+  resetSuggestionView();
+  updateSendButtonState();
+  elements.manualTestStatus.textContent =
+    "테스트 문의를 열었습니다. 초안을 생성 중입니다.";
+
+  try {
+    await generateSuggestion();
+    elements.manualTestStatus.textContent =
+      "테스트 초안 생성이 완료되었습니다. 실제 전송은 비활성화되어 있습니다.";
+  } catch (error) {
+    elements.manualTestStatus.textContent = error.message;
+  }
+}
+
+async function resetManualTest() {
+  state.manualConversation = null;
+  elements.manualCustomerName.value = "테스트 고객";
+  elements.manualMessage.value = "";
+  elements.manualHasOrder.checked = false;
+  elements.manualProductName.value = "";
+  elements.manualOrderStatus.value = "";
+  elements.manualOrderDate.value = "";
+  elements.manualOrderNumber.value = "";
+  elements.manualTestStatus.textContent =
+    "질문을 입력한 뒤 테스트 초안 생성을 누르세요.";
+  updateSendButtonState();
+
+  if (state.previousConversationId) {
+    await selectConversation(state.previousConversationId);
+    await generateSuggestion();
+    return;
+  }
+
+  resetSuggestionView();
+  elements.customerName.textContent = "대화를 선택해 주세요";
+  elements.orderSummary.textContent = "주문 정보 없음";
+  elements.productTags.innerHTML = "";
+  elements.thread.innerHTML = "";
+  renderConversationList(state.filteredConversations);
 }
 
 async function copyDraft() {
@@ -367,6 +534,8 @@ async function bootstrap() {
   renderConversationList(state.filteredConversations);
   elements.modeSelect.value = payload.settings.mode;
   renderLlmStatus(payload.llmStatus);
+  elements.manualOrderDate.value = todayString();
+  updateSendButtonState();
   await refreshAutomationStatus();
 
   const firstAwaiting =
@@ -380,6 +549,12 @@ async function bootstrap() {
 
 elements.searchInput.addEventListener("input", (event) => {
   applyFilter(event.target.value);
+});
+elements.applyManualTestButton.addEventListener("click", applyManualTest);
+elements.resetManualTestButton.addEventListener("click", () => {
+  resetManualTest().catch((error) => {
+    elements.manualTestStatus.textContent = error.message;
+  });
 });
 elements.accountSelect.addEventListener("change", saveActiveAccount);
 elements.modeSelect.addEventListener("change", saveMode);
