@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_TALKTALK = {
-  url: "https://talk.sell.smartstore.naver.com/",
+  url: "https://partner.talk.naver.com/",
   pollIntervalMs: 12000,
   selectorsPath: "config/talktalk.selectors.sample.json",
   browserChannel: null,

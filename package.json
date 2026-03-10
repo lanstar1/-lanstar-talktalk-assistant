@@ -7,6 +7,7 @@
     "dev": "node src/server.js",
     "start": "node src/server.js",
     "export-storage-state": "node scripts/export-storage-state.js",
+    "inspect-talktalk-dom": "node scripts/inspect-talktalk-dom.js",
     "test": "node --test"
   },
   "engines": {

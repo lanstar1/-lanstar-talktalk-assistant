@@ -1,5 +1,6 @@
 {
-  "url": "https://talk.sell.smartstore.naver.com/",
+  "url": "https://partner.talk.naver.com/",
+  "accountListUrl": "https://partner.talk.naver.com/web/accounts/list",
   "pollIntervalMs": 12000,
   "selectors": {
     "customerName": "[class*='Profile'] strong, [class*='profile'] strong, header strong",
@@ -15,5 +16,27 @@
     "purchaseItemOrderNumber": "",
     "input": "textarea, [contenteditable='true']",
     "sendButton": "role=button[name=\"전송\"]"
+  },
+  "partnerSelectors": {
+    "home": {
+      "myAccountsButton": "a[href='/web/accounts/list'][class*='Gnb-module__control']",
+      "counselMenu": "a[href='/web/feature/counsel'][class*='Gnb-module__menu']"
+    },
+    "accountList": {
+      "items": "li[class*='AccountListPage-module__item']",
+      "itemName": "strong[class*='Profile-module__info_item']",
+      "publicChatLinks": "a[class*='Profile-module__link_url'][href*='talk.naver.com/']",
+      "publicProfileLinks": "a[class*='Profile-module__link_url'][href*='talk.naver.com/profile/']",
+      "statusButton": "button[class*='AccountDropdown-module__button'][aria-haspopup='listbox']",
+      "statusOptions": "ul[class*='AccountDropdown-module__layer'][role='listbox'] button[class*='AccountDropdown-module__option_button'][role='option']",
+      "homeButton": "button[class*='AccountListPage-module__control_item']",
+      "moreButton": "button[class*='MoreButton-module__button'][aria-haspopup='true']",
+      "moreMenu": "div[class*='MoreButton-module__layer'][role='menu']",
+      "linkedChannelRows": "li[class*='AccountListPage-module__channel_item']",
+      "linkedChannelText": "span[class*='Channel-module__text']",
+      "linkedChannelLink": "a[class*='Channel-module__-link']",
+      "confirmPopup": "div[class*='CommonPopup-module__dimmed']",
+      "confirmButton": "button[class*='CommonButtonList-module__-confirm']"
+    }
   }
 }

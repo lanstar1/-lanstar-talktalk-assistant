@@ -83,6 +83,41 @@ Render 디스크 업로드가 필요하면 관리자 토큰을 설정한 뒤 아
 - `POST /api/admin/storage-state`
 - `GET /api/admin/storage-state-status`
 
+## DOM 셀렉터 점검
+
+실제 톡톡 파트너센터 DOM은 [config/talktalk.selectors.sample.json](/Users/lanstar/Documents/New project/config/talktalk.selectors.sample.json) 에 정리합니다. 현재는 아래 경로까지 실측 완료 상태입니다.
+
+1. `https://partner.talk.naver.com/`
+2. 상단 `내 계정`
+3. `https://partner.talk.naver.com/web/accounts/list`
+
+확보된 범위:
+
+- 상단 `내 계정` 버튼
+- `상담` 메뉴
+- 계정 목록 카드
+- 계정명
+- `채팅창` 공개 URL
+- `계정 홈 바로가기`
+- 상태 드롭다운
+- 연결된 스마트스토어 채널 링크
+
+직접 다시 점검하려면 아래를 사용합니다.
+
+```bash
+npm run inspect-talktalk-dom
+```
+
+선택 클릭까지 포함하려면 예:
+
+```bash
+TALKTALK_INSPECT_URL=https://partner.talk.naver.com \
+TALKTALK_CLICK_SELECTOR="a[href='/web/accounts/list'][class*='Gnb-module__control']" \
+npm run inspect-talktalk-dom
+```
+
+산출물은 `tmp/talktalk-inspect/` 아래에 저장됩니다.
+
 ## 운영 흐름
 
 1. 좌측 상단에서 톡톡 채널을 선택
