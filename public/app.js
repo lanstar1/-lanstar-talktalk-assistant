@@ -407,7 +407,7 @@ async function saveActiveAccount() {
 async function refreshAutomationStatus() {
   const payload = await request("/api/automation/status");
   const { automation } = payload;
-  const accountLabel = state.activeAccount ? `선택 계정 ${state.activeAccount.name}` : "계정 미선택";
+  const accountLabel = state.activeAccount ? `선택 채널 ${state.activeAccount.name}` : "채널 미선택";
 
   if (automation.running) {
     elements.automationStatus.textContent = `${accountLabel} / 브라우저 실행 중 / 최근 초안 ${
@@ -464,7 +464,7 @@ async function sendDraft() {
       method: "POST",
       body: JSON.stringify({ replyText })
     });
-    elements.automationStatus.textContent = `${state.activeAccount?.name ?? "계정"} 계정으로 답변을 전송했습니다.`;
+    elements.automationStatus.textContent = `${state.activeAccount?.name ?? "선택 채널"} 채널 대화창으로 답변을 전송했습니다.`;
     return payload;
   } catch (error) {
     elements.automationStatus.textContent = error.message;

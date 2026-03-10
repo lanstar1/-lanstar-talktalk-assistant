@@ -7,7 +7,9 @@ const DEFAULT_TALKTALK = {
   selectorsPath: "config/talktalk.selectors.sample.json",
   browserChannel: null,
   headless: false,
-  storageStatePath: null
+  storageStatePath: null,
+  publicChatUrl: "",
+  sourceName: ""
 };
 
 const DEFAULT_LLM = {
@@ -18,14 +20,15 @@ const DEFAULT_LLM = {
   allowAutoSend: false
 };
 
-function createDefaultAccount(id, name, userDataDir) {
+function createDefaultAccount(id, name, userDataDir, metadata = {}) {
   return {
     id,
     name,
     enabled: true,
     talktalk: {
       ...DEFAULT_TALKTALK,
-      userDataDir
+      userDataDir,
+      ...metadata
     }
   };
 }
@@ -38,16 +41,33 @@ const DEFAULT_SETTINGS = {
   accounts: [
     createDefaultAccount(
       "account-1",
-      "톡톡 계정 1",
-      "storage/browser-profile/account-1"
+      "랜스타",
+      "storage/browser-profile/account-1",
+      {
+        publicChatUrl: "http://talk.naver.com/W4QWIB",
+        sourceName: "라인업시스템"
+      }
     ),
     createDefaultAccount(
       "account-2",
-      "톡톡 계정 2",
-      "storage/browser-profile/account-2"
+      "스토어팜",
+      "storage/browser-profile/account-2",
+      {
+        publicChatUrl: "http://talk.naver.com/WC5FMA",
+        sourceName: "랜스타"
+      }
     )
   ]
 };
+
+function normalizeAccountName(name, fallbackName) {
+  const normalized = String(name ?? "").trim();
+  if (!normalized || /^톡톡 계정 \d+$/u.test(normalized)) {
+    return fallbackName;
+  }
+
+  return normalized;
+}
 
 function mergeTalkTalk(baseTalkTalk = {}, updateTalkTalk = {}) {
   return {
@@ -73,17 +93,26 @@ function mergeAccounts(baseAccounts = [], updateAccounts = []) {
   ];
 
   return ids.map((id, index) => {
+    const defaultAccount =
+      DEFAULT_SETTINGS.accounts.find((account) => account.id === id) ??
+      createDefaultAccount(id, `채널 ${index + 1}`, `storage/browser-profile/${id}`);
     const baseAccount =
       baseMap.get(id) ??
-      DEFAULT_SETTINGS.accounts.find((account) => account.id === id) ??
-      createDefaultAccount(id, `톡톡 계정 ${index + 1}`, `storage/browser-profile/${id}`);
+      defaultAccount;
     const updateAccount = updateMap.get(id) ?? {};
+    const talktalk = mergeTalkTalk(
+      mergeTalkTalk(defaultAccount.talktalk, baseAccount.talktalk),
+      updateAccount.talktalk ?? {}
+    );
 
     return {
       id,
-      name: updateAccount.name ?? baseAccount.name,
+      name: normalizeAccountName(
+        updateAccount.name ?? baseAccount.name,
+        defaultAccount.name
+      ),
       enabled: updateAccount.enabled ?? baseAccount.enabled ?? true,
-      talktalk: mergeTalkTalk(baseAccount.talktalk, updateAccount.talktalk ?? {})
+      talktalk
     };
   });
 }
@@ -114,10 +143,11 @@ function migrateLegacySettings(rawSettings = {}) {
     accounts: [
       {
         id: "account-1",
-        name: "톡톡 계정 1",
+        name: "랜스타",
         enabled: true,
         talktalk: {
           ...DEFAULT_TALKTALK,
+          ...DEFAULT_SETTINGS.accounts[0].talktalk,
           ...legacyTalkTalk,
           userDataDir:
             legacyTalkTalk.userDataDir ?? "storage/browser-profile/account-1"
@@ -125,8 +155,9 @@ function migrateLegacySettings(rawSettings = {}) {
       },
       createDefaultAccount(
         "account-2",
-        "톡톡 계정 2",
-        "storage/browser-profile/account-2"
+        "스토어팜",
+        "storage/browser-profile/account-2",
+        DEFAULT_SETTINGS.accounts[1].talktalk
       )
     ]
   };

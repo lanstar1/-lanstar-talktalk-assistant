@@ -8,7 +8,7 @@
 - 환불, 배송지 변경, AS, 배송 문의에 대한 정책 우선 처리
 - 기존 이력이 없거나 약할 때 OpenAI로 답변 보강
 - `검토 후 전송` / `자동 전송` 모드 전환
-- 계정 2개 분리 운영
+- 같은 네이버 로그인 안의 톡톡 채널 2개 선택 운영
 - 네이버 톡톡 브라우저 자동화
 
 ## 로컬 실행
@@ -85,7 +85,7 @@ Render 디스크 업로드가 필요하면 관리자 토큰을 설정한 뒤 아
 
 ## 운영 흐름
 
-1. 좌측 상단에서 계정을 선택
+1. 좌측 상단에서 톡톡 채널을 선택
 2. 자동화 시작
 3. 현재 열려 있는 톡톡 대화에서 메시지 수집
 4. `정책 + 검색` 으로 기본 답변 생성
@@ -98,7 +98,7 @@ Render 디스크 업로드가 필요하면 관리자 토큰을 설정한 뒤 아
 - [src/lib/reply-engine.js](/Users/lanstar/Documents/New project/src/lib/reply-engine.js): 정책 + 검색 + LLM 하이브리드 엔진
 - [src/lib/llm-client.js](/Users/lanstar/Documents/New project/src/lib/llm-client.js): OpenAI 호출
 - [src/automation/talktalk-worker.js](/Users/lanstar/Documents/New project/src/automation/talktalk-worker.js): Playwright 워커
-- [src/lib/settings.js](/Users/lanstar/Documents/New project/src/lib/settings.js): 다계정 / LLM / 브라우저 설정
+- [src/lib/settings.js](/Users/lanstar/Documents/New project/src/lib/settings.js): 채널 / LLM / 브라우저 설정
 - [scripts/export-storage-state.js](/Users/lanstar/Documents/New project/scripts/export-storage-state.js): 세션 파일 추출
 
 ## 한계

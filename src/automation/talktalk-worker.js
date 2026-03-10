@@ -173,7 +173,7 @@ export class TalkTalkWorker {
     const account = this.getCurrentAccount();
     if (this.currentAccountId && account.id !== this.currentAccountId) {
       throw new Error(
-        "활성 계정이 변경되었습니다. 자동화 워커를 다시 시작해 주세요."
+        "활성 채널이 변경되었습니다. 자동화 워커를 다시 시작해 주세요."
       );
     }
 
@@ -211,7 +211,7 @@ export class TalkTalkWorker {
 
     const account = this.getCurrentAccount();
     if (this.currentAccountId && account.id !== this.currentAccountId) {
-      throw new Error("선택된 계정이 현재 실행 중인 브라우저 계정과 다릅니다.");
+      throw new Error("선택된 채널이 현재 실행 중인 톡톡 브라우저 채널과 다릅니다.");
     }
 
     const config = await this.loadSelectorConfig(account);
