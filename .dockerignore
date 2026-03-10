@@ -1,0 +1,4 @@
+node_modules
+storage/browser-profile
+data/chatshots
+.DS_Store

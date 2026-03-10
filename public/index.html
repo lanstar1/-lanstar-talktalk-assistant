@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lanstar TalkTalk Assistant</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand-card">
+          <p class="eyebrow">Lanstar Control Room</p>
+          <h1>톡톡 상담 자동화</h1>
+          <p class="subtle">
+            Q&A 4,077건과 상담 이력 2,406건 기준으로 초안을 생성합니다.
+          </p>
+        </div>
+
+        <section class="panel metrics" id="metrics"></section>
+
+        <section class="panel">
+          <p class="label">LLM 보강 상태</p>
+          <p id="llmStatusText" class="subtle small">
+            설정 확인 중
+          </p>
+        </section>
+
+        <section class="panel">
+          <label class="label" for="searchInput">대화 검색</label>
+          <input id="searchInput" class="text-input" placeholder="고객명, 상품명, 문의 내용" />
+        </section>
+
+        <section class="panel">
+          <div class="panel-row">
+            <div>
+              <p class="label">활성 계정</p>
+              <p class="subtle small">계정별 브라우저 프로필이 분리됩니다.</p>
+            </div>
+            <select id="accountSelect" class="select-input"></select>
+          </div>
+          <div class="panel-row">
+            <div>
+              <p class="label">응답 모드</p>
+              <p class="subtle small">현재 기본값은 검토 후 전송입니다.</p>
+            </div>
+            <select id="modeSelect" class="select-input">
+              <option value="review">검토 후 전송</option>
+              <option value="auto">자동 전송</option>
+            </select>
+          </div>
+          <div class="button-row">
+            <button id="startAutomationButton" class="button primary">자동화 시작</button>
+            <button id="stopAutomationButton" class="button ghost">중지</button>
+          </div>
+          <p id="automationStatus" class="status-text">자동화 워커 정지 상태</p>
+        </section>
+
+        <section class="panel conversation-panel">
+          <div class="panel-row">
+            <h2>대화 목록</h2>
+            <span id="conversationCount" class="badge"></span>
+          </div>
+          <div id="conversationList" class="conversation-list"></div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <section class="workspace">
+          <div class="thread-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Conversation</p>
+                <h2 id="customerName">대화를 선택해 주세요</h2>
+              </div>
+              <div id="orderSummary" class="order-summary">주문 정보 없음</div>
+            </div>
+            <div id="productTags" class="tag-row"></div>
+            <div id="thread" class="thread"></div>
+          </div>
+
+          <div class="inspector">
+            <section class="panel">
+              <div class="panel-row">
+                <div>
+                  <p class="eyebrow">Draft</p>
+                  <h2>추천 답변</h2>
+                </div>
+                <div class="button-row">
+                  <button id="generateButton" class="button primary">초안 생성</button>
+                  <button id="sendButton" class="button strong">검토 후 전송</button>
+                </div>
+              </div>
+              <div class="confidence-wrap">
+                <div class="confidence-track">
+                  <div id="confidenceBar" class="confidence-bar"></div>
+                </div>
+                <span id="confidenceText" class="confidence-text">신뢰도 -</span>
+              </div>
+              <p class="subtle small">
+                검토 후 전송은 현재 선택된 계정의 톡톡 브라우저에서 열려 있는 대화창으로 전송됩니다.
+              </p>
+              <textarea id="draftReply" class="draft-textarea" placeholder="추천 답변이 여기에 표시됩니다."></textarea>
+              <div id="flagList" class="flag-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-row">
+                <div>
+                  <p class="eyebrow">Evidence</p>
+                  <h2>근거 데이터</h2>
+                </div>
+                <button id="copyButton" class="button ghost">답변 복사</button>
+              </div>
+              <div id="evidenceList" class="evidence-list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="conversationItemTemplate">
+      <button class="conversation-item">
+        <div class="conversation-top">
+          <strong class="conversation-name"></strong>
+          <span class="conversation-date"></span>
+        </div>
+        <div class="conversation-products"></div>
+        <p class="conversation-preview"></p>
+      </button>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+  </html>

@@ -1,0 +1,13 @@
+{
+  "url": "https://talk.sell.smartstore.naver.com/",
+  "pollIntervalMs": 12000,
+  "selectors": {
+    "customerName": "[class*='Profile'] strong, [class*='profile'] strong, header strong",
+    "messageRows": "[data-testid='message-row']",
+    "incomingRow": "[data-role='customer']",
+    "outgoingRow": "[data-role='seller']",
+    "messageText": "[class*='bubble'], [class*='message'], p",
+    "input": "textarea, [contenteditable='true']",
+    "sendButton": "role=button[name=\"전송\"]"
+  }
+}

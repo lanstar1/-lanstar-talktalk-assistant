@@ -1,0 +1,18 @@
+{
+  "name": "lanstar-talktalk-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "export-storage-state": "node scripts/export-storage-state.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2"
+  }
+}

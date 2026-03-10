@@ -1,0 +1,518 @@
+import {
+  buildSearchIndexParts,
+  cleanAnswer,
+  extractOrderStatuses,
+  extractProductNames,
+  normalizeText,
+  normalizeWhitespace,
+  scoreSearch,
+  snippet,
+  summarizePurchaseHistory
+} from "./text-utils.js";
+
+const DEFAULT_LLM_SETTINGS = {
+  enabled: true,
+  enhanceWhenConfidenceBelow: 0.78,
+  weakAnswerLength: 140,
+  maxEvidenceCount: 4,
+  allowAutoSend: false
+};
+
+function includesAny(text, keywords = []) {
+  return keywords.some((keyword) => text.includes(normalizeText(keyword)));
+}
+
+function buildEvidenceFromMatch(match) {
+  return {
+    id: match.example.id,
+    source: match.example.source,
+    productName: match.example.productName,
+    score: match.score,
+    customerText: snippet(match.example.customerText, 90),
+    answerText: snippet(match.example.answerText, 120)
+  };
+}
+
+function maybeAddGreetingAndClosing(body, policies) {
+  const cleaned = cleanAnswer(body);
+  const greeting = policies.greeting ?? "";
+  const closing = policies.closing ?? "";
+  const normalizedBody = normalizeText(cleaned);
+
+  if (
+    normalizeText(greeting) &&
+    normalizedBody.startsWith(normalizeText(greeting))
+  ) {
+    return cleaned;
+  }
+
+  return [greeting, cleaned, closing].filter(Boolean).join("\n\n");
+}
+
+function llmReasonLabel(reason) {
+  return (
+    {
+      no_history: "기존 이력 없음",
+      low_confidence: "검색 신뢰도 낮음",
+      weak_answer: "기존 답변 약함",
+      needs_reasoning: "추론형 기술지원 필요"
+    }[reason] ?? "LLM 보강"
+  );
+}
+
+export class ReplyEngine {
+  constructor({ examples, policies, llmClient = null, getSettings = null }) {
+    this.examples = examples;
+    this.policies = policies;
+    this.llmClient = llmClient;
+    this.getSettings = getSettings;
+  }
+
+  getLlmSettings() {
+    return {
+      ...DEFAULT_LLM_SETTINGS,
+      ...(this.getSettings?.().llm ?? {})
+    };
+  }
+
+  getLlmStatus() {
+    const clientStatus = this.llmClient?.getStatus?.() ?? {
+      enabled: false,
+      available: false,
+      provider: "none",
+      model: null,
+      baseUrl: null
+    };
+
+    return {
+      ...clientStatus,
+      enabled: this.getLlmSettings().enabled && clientStatus.enabled !== false
+    };
+  }
+
+  findMatches(customerText, productNames = [], limit = 3) {
+    const queryIndex = buildSearchIndexParts(customerText);
+
+    return this.examples
+      .map((example) => {
+        const productBonus =
+          productNames.length &&
+          productNames.some((name) =>
+            normalizeText(example.productName).includes(normalizeText(name))
+          )
+            ? 0.08
+            : 0;
+
+        return {
+          example,
+          score: scoreSearch(queryIndex, example.searchIndex, productBonus)
+        };
+      })
+      .filter((item) => item.score > 0.12)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit);
+  }
+
+  detectFlags(customerText) {
+    const normalized = normalizeText(customerText);
+    const flags = [];
+
+    if (includesAny(normalized, this.policies.sensitiveKeywords)) {
+      flags.push({
+        type: "sensitive",
+        label: "민감 문의",
+        reviewOnly: true,
+        reason: "개인정보 또는 민감 키워드가 감지되었습니다."
+      });
+    }
+
+    if (includesAny(normalized, this.policies.reviewOnlyKeywords)) {
+      flags.push({
+        type: "policy_review",
+        label: "정책 검토 필요",
+        reviewOnly: true,
+        reason: "환불/반품/교환 등 운영 정책 확인이 필요한 문의입니다."
+      });
+    }
+
+    return flags;
+  }
+
+  matchPolicy({ customerText, purchaseHistory }) {
+    const normalized = normalizeText(customerText);
+    const hasOwnOrder = Array.isArray(purchaseHistory) && purchaseHistory.length > 0;
+
+    if (includesAny(normalized, this.policies.refundKeywords)) {
+      const reply = hasOwnOrder
+        ? [
+            "주문 내역이 확인되는 건에 대해서는 네이버쇼핑 주문내역에서 환불 또는 반품 접수로 진행 부탁드립니다.",
+            "단순 변심에 의한 환불은 왕복 배송비가 청구될 수 있는 점 참고 부탁드립니다."
+          ].join("\n")
+        : "해당 주문이 저희 네이버쇼핑 주문내역에서 확인되지 않는 경우에는 주문하신 구매처에서 환불 또는 반품 요청을 진행해 주셔야 합니다.";
+
+      return {
+        rule: "refund",
+        forceReview: true,
+        autoEligible: false,
+        reply,
+        evidence: [
+          {
+            id: "policy:refund",
+            source: "운영정책",
+            productName: "",
+            score: 1,
+            customerText: "환불/반품/취소 문의",
+            answerText: reply
+          }
+        ]
+      };
+    }
+
+    if (includesAny(normalized, this.policies.addressChangeKeywords)) {
+      const reply =
+        "배송지 변경은 주문하신 구매처의 주문내역에서 직접 진행해 주셔야 합니다. 저희 쪽에서 임의 변경은 어려운 점 양해 부탁드립니다.";
+      return {
+        rule: "address_change",
+        forceReview: true,
+        autoEligible: false,
+        reply,
+        evidence: [
+          {
+            id: "policy:address_change",
+            source: "운영정책",
+            productName: "",
+            score: 1,
+            customerText: "배송지 변경 문의",
+            answerText: reply
+          }
+        ]
+      };
+    }
+
+    if (includesAny(normalized, this.policies.shippingKeywords)) {
+      const statuses = extractOrderStatuses(purchaseHistory);
+      const reply = hasOwnOrder
+        ? statuses.length
+          ? [
+              `주문 내역상 현재 ${statuses.join(", ")} 상태로 확인됩니다.`,
+              "네이버쇼핑 주문내역에서 배송 흐름도 함께 확인 부탁드립니다."
+            ].join("\n")
+          : "주문 내역은 확인되나 현재 상세 배송 상태는 네이버쇼핑 주문내역에서 함께 확인 부탁드립니다."
+        : "해당 주문이 저희 네이버쇼핑 주문내역에서 확인되지 않는 경우에는 주문하신 구매처에서 배송 상태를 확인해 주셔야 합니다.";
+
+      return {
+        rule: "shipping",
+        forceReview: false,
+        autoEligible: true,
+        reply,
+        evidence: [
+          {
+            id: "policy:shipping",
+            source: "주문정보",
+            productName: "",
+            score: 1,
+            customerText: "배송 문의",
+            answerText: reply
+          }
+        ]
+      };
+    }
+
+    if (includesAny(normalized, this.policies.asKeywords)) {
+      const initialDefect = includesAny(
+        normalized,
+        this.policies.initialDefectKeywords
+      );
+      const usedFault = includesAny(normalized, this.policies.usedFaultKeywords);
+
+      let reply;
+      if (initialDefect) {
+        reply = [
+          "초기 불량으로 확인되는 경우에는 바로 교환 진행을 도와드리고 있습니다.",
+          "주문번호와 현재 증상을 함께 남겨주시면 빠르게 확인 후 절차를 안내드리겠습니다."
+        ].join("\n");
+      } else if (usedFault) {
+        reply = [
+          "사용 중 발생한 불량은 구매 후 1년 이내인 경우 무상 교환으로 안내드리고 있습니다.",
+          "구매처, 주문번호, 사용 기간, 현재 증상을 남겨주시면 확인 후 절차를 안내드리겠습니다."
+        ].join("\n");
+      } else {
+        reply = [
+          "불량 또는 작동 이상 문의로 확인됩니다.",
+          "초기 불량인지 사용 중 발생한 증상인지와 주문번호를 함께 알려주시면 교환 가능 여부를 확인해 드리겠습니다."
+        ].join("\n");
+      }
+
+      return {
+        rule: "as_policy",
+        forceReview: true,
+        autoEligible: false,
+        reply,
+        evidence: [
+          {
+            id: "policy:as",
+            source: "운영정책",
+            productName: "",
+            score: 1,
+            customerText: "AS/불량 문의",
+            answerText: reply
+          }
+        ]
+      };
+    }
+
+    return null;
+  }
+
+  buildFallback({ productNames }) {
+    if (productNames.length) {
+      return [
+        `${productNames[0]} 관련 문의로 확인됩니다.`,
+        "현재 증상과 사용 환경을 조금 더 자세히 알려주시면 정확히 확인 후 안내드리겠습니다."
+      ].join("\n");
+    }
+
+    return this.policies.fallback;
+  }
+
+  buildBaseSuggestion({ customerName = "고객", purchaseHistory = [], messages = [] }) {
+    const conversationMessages = messages.map((message) => ({
+      role: message.role,
+      text: normalizeWhitespace(message.text ?? "")
+    }));
+    const pendingCustomerMessages = [];
+    for (let index = conversationMessages.length - 1; index >= 0; index -= 1) {
+      if (conversationMessages[index].role === "customer") {
+        pendingCustomerMessages.unshift(conversationMessages[index].text);
+        continue;
+      }
+      if (pendingCustomerMessages.length) {
+        break;
+      }
+    }
+
+    const customerText = pendingCustomerMessages.join(" ").trim();
+    const productNames = extractProductNames(purchaseHistory);
+    const flags = this.detectFlags(customerText);
+    const policyMatch = this.matchPolicy({ customerText, purchaseHistory });
+    const matches = customerText ? this.findMatches(customerText, productNames) : [];
+
+    let body;
+    let evidence;
+    let confidence;
+    let generationSource;
+
+    if (policyMatch) {
+      body = policyMatch.reply;
+      evidence = policyMatch.evidence;
+      confidence = 0.98;
+      generationSource = "policy";
+    } else if (matches.length) {
+      body = cleanAnswer(matches[0].example.answerText);
+      evidence = matches.map(buildEvidenceFromMatch);
+      confidence = Math.min(0.92, 0.45 + matches[0].score);
+      generationSource = "retrieval";
+    } else {
+      body = this.buildFallback({ productNames });
+      evidence = [];
+      confidence = 0.36;
+      generationSource = "fallback";
+    }
+
+    const replyText = maybeAddGreetingAndClosing(body, this.policies);
+    const canAutoSend =
+      confidence >= 0.8 &&
+      !flags.some((flag) => flag.reviewOnly) &&
+      !(policyMatch && policyMatch.autoEligible === false);
+
+    return {
+      suggestion: {
+        customerName,
+        customerText,
+        productNames,
+        replyText,
+        evidence,
+        flags,
+        confidence: Number(confidence.toFixed(2)),
+        canAutoSend,
+        policyRule: policyMatch?.rule ?? null,
+        generationSource,
+        llm: {
+          ...this.getLlmStatus(),
+          used: false,
+          reason: null,
+          error: null,
+          missingInformation: []
+        }
+      },
+      context: {
+        customerName,
+        purchaseHistory,
+        messages: conversationMessages,
+        customerText,
+        productNames,
+        flags,
+        policyMatch,
+        matches,
+        confidence,
+        body,
+        replyText,
+        evidence,
+        generationSource
+      }
+    };
+  }
+
+  shouldUseLlmEnhancement(suggestion, context) {
+    const llmSettings = this.getLlmSettings();
+    if (!llmSettings.enabled || !this.llmClient?.isAvailable?.()) {
+      return null;
+    }
+
+    if (!context.customerText || suggestion.policyRule) {
+      return null;
+    }
+
+    const normalizedQuestion = normalizeText(context.customerText);
+    const topScore = context.matches[0]?.score ?? 0;
+    const answerLength = cleanAnswer(context.body).length;
+    const reasoningKeywords = [
+      "안되",
+      "오류",
+      "연결",
+      "인식",
+      "설치",
+      "화면",
+      "소리",
+      "출력",
+      "입력",
+      "전원",
+      "깜빡",
+      "안나와"
+    ];
+
+    if (!context.matches.length) {
+      return "no_history";
+    }
+
+    if (suggestion.confidence < llmSettings.enhanceWhenConfidenceBelow) {
+      return "low_confidence";
+    }
+
+    if (answerLength < llmSettings.weakAnswerLength) {
+      return "weak_answer";
+    }
+
+    if (
+      reasoningKeywords.some((keyword) => normalizedQuestion.includes(keyword)) &&
+      topScore < 0.86
+    ) {
+      return "needs_reasoning";
+    }
+
+    return null;
+  }
+
+  buildLlmContext(payload, suggestion, context, enhancementReason) {
+    const llmSettings = this.getLlmSettings();
+
+    return {
+      brandName: this.policies.brandName ?? "랜스타",
+      customerName: payload.customerName ?? suggestion.customerName,
+      customerText: suggestion.customerText,
+      productNames: suggestion.productNames,
+      messages: context.messages,
+      purchaseSummary: summarizePurchaseHistory(payload.purchaseHistory ?? []),
+      baseReplyText: suggestion.replyText,
+      enhancementReason,
+      flags: suggestion.flags,
+      evidence: suggestion.evidence.slice(0, llmSettings.maxEvidenceCount)
+    };
+  }
+
+  suggestReply(payload) {
+    return this.buildBaseSuggestion(payload).suggestion;
+  }
+
+  async suggestReplyEnhanced(payload) {
+    const { suggestion, context } = this.buildBaseSuggestion(payload);
+    const enhancementReason = this.shouldUseLlmEnhancement(suggestion, context);
+
+    if (!enhancementReason) {
+      return suggestion;
+    }
+
+    try {
+      const enhanced = await this.llmClient.generateReplyEnhancement(
+        this.buildLlmContext(payload, suggestion, context, enhancementReason)
+      );
+
+      if (!enhanced?.replyText) {
+        return suggestion;
+      }
+
+      const flags = [...suggestion.flags];
+      const missingInformation = Array.isArray(enhanced.missingInformation)
+        ? enhanced.missingInformation.filter(Boolean)
+        : [];
+
+      if (enhanced.needsReview || missingInformation.length) {
+        flags.push({
+          type: "llm_review",
+          label: "LLM 검토 필요",
+          reviewOnly: true,
+          reason:
+            missingInformation.length > 0
+              ? `추가 확인 필요: ${missingInformation.join(", ")}`
+              : "LLM이 추가 확인이 필요하다고 판단했습니다."
+        });
+      }
+
+      return {
+        ...suggestion,
+        replyText: maybeAddGreetingAndClosing(enhanced.replyText, this.policies),
+        evidence: [
+          {
+            id: "llm:enhanced",
+            source: "LLM 보강",
+            productName: suggestion.productNames[0] ?? "",
+            score: 1,
+            customerText: llmReasonLabel(enhancementReason),
+            answerText: snippet(
+              enhanced.reasoning ?? enhanced.replyText,
+              120
+            )
+          },
+          ...suggestion.evidence
+        ],
+        flags,
+        confidence: Number(
+          Math.max(suggestion.confidence, Math.min(0.95, suggestion.confidence + 0.08)).toFixed(2)
+        ),
+        canAutoSend:
+          suggestion.canAutoSend &&
+          this.getLlmSettings().allowAutoSend &&
+          !flags.some((flag) => flag.reviewOnly),
+        generationSource: "llm_hybrid",
+        llm: {
+          ...this.getLlmStatus(),
+          used: true,
+          reason: enhancementReason,
+          error: null,
+          missingInformation
+        }
+      };
+    } catch (error) {
+      return {
+        ...suggestion,
+        llm: {
+          ...this.getLlmStatus(),
+          used: false,
+          reason: enhancementReason,
+          error: error.message,
+          missingInformation: []
+        }
+      };
+    }
+  }
+}
