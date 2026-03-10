@@ -38,17 +38,8 @@ const DEFAULT_SETTINGS = {
   monitorOnly: true,
   autoSendThreshold: 0.8,
   llm: DEFAULT_LLM,
-  activeAccountId: "account-1",
+  activeAccountId: "account-2",
   accounts: [
-    createDefaultAccount(
-      "account-1",
-      "랜스타",
-      "storage/browser-profile/account-1",
-      {
-        publicChatUrl: "http://talk.naver.com/W4QWIB",
-        sourceName: "라인업시스템"
-      }
-    ),
     createDefaultAccount(
       "account-2",
       "스토어팜",
@@ -82,16 +73,19 @@ function mergeTalkTalk(baseTalkTalk = {}, updateTalkTalk = {}) {
   };
 }
 
-function mergeAccounts(baseAccounts = [], updateAccounts = []) {
+function mergeAccounts(baseAccounts = [], updateAccounts = [], options = {}) {
   const baseMap = new Map(baseAccounts.map((account) => [account.id, account]));
   const updateMap = new Map(updateAccounts.map((account) => [account.id, account]));
-  const ids = [
-    ...new Set([
-      ...DEFAULT_SETTINGS.accounts.map((account) => account.id),
-      ...baseAccounts.map((account) => account.id),
-      ...updateAccounts.map((account) => account.id)
-    ])
-  ];
+  const replaceAccounts = options.replaceAccounts === true;
+  const ids = replaceAccounts
+    ? [...new Set(updateAccounts.map((account) => account.id))]
+    : [
+        ...new Set([
+          ...DEFAULT_SETTINGS.accounts.map((account) => account.id),
+          ...baseAccounts.map((account) => account.id),
+          ...updateAccounts.map((account) => account.id)
+        ])
+      ];
 
   return ids.map((id, index) => {
     const defaultAccount =
@@ -129,7 +123,9 @@ function mergeSettings(source, updates) {
       ...(updates.llm ?? {})
     },
     activeAccountId: updates.activeAccountId ?? source.activeAccountId,
-    accounts: mergeAccounts(source.accounts, updates.accounts ?? [])
+    accounts: mergeAccounts(source.accounts, updates.accounts ?? [], {
+      replaceAccounts: updates.replaceAccounts === true
+    })
   };
 }
 
@@ -141,25 +137,18 @@ function migrateLegacySettings(rawSettings = {}) {
   const legacyTalkTalk = rawSettings.talktalk ?? {};
   return {
     ...rawSettings,
-    activeAccountId: rawSettings.activeAccountId ?? "account-1",
+    activeAccountId: rawSettings.activeAccountId ?? "account-2",
     accounts: [
-      {
-        id: "account-1",
-        name: "랜스타",
-        enabled: true,
-        talktalk: {
-          ...DEFAULT_TALKTALK,
-          ...DEFAULT_SETTINGS.accounts[0].talktalk,
-          ...legacyTalkTalk,
-          userDataDir:
-            legacyTalkTalk.userDataDir ?? "storage/browser-profile/account-1"
-        }
-      },
       createDefaultAccount(
         "account-2",
         "스토어팜",
         "storage/browser-profile/account-2",
-        DEFAULT_SETTINGS.accounts[1].talktalk
+        {
+          ...DEFAULT_SETTINGS.accounts[0].talktalk,
+          ...legacyTalkTalk,
+          userDataDir:
+            legacyTalkTalk.userDataDir ?? "storage/browser-profile/account-2"
+        }
       )
     ]
   };
