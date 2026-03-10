@@ -7,6 +7,7 @@ import {
   buildLiveChatListUrl,
   buildMessageSignature,
   buildPendingCustomerText,
+  compressMessages,
   createLiveConversationId,
   deriveProductNamesFromMessages,
   extractUserIdFromChatHref,
@@ -39,6 +40,11 @@ function lastOf(values = []) {
   return values[values.length - 1] ?? null;
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export class TalkTalkWorker {
   constructor({ rootDir, engine, getSettings }) {
     this.rootDir = rootDir;
@@ -58,6 +64,19 @@ export class TalkTalkWorker {
     this.manualSelection = false;
     this.lastSuggestionSignature = null;
     this.liveState = this.createEmptyLiveState();
+    this.selectorConfig = null;
+    this.maxConversationList = positiveInteger(
+      process.env.TALKTALK_MAX_CONVERSATIONS,
+      30
+    );
+    this.maxMessageHistory = positiveInteger(
+      process.env.TALKTALK_MAX_MESSAGES,
+      40
+    );
+    this.browserRecycleTicks = positiveInteger(
+      process.env.TALKTALK_BROWSER_RECYCLE_TICKS,
+      process.env.RENDER ? 90 : 0
+    );
   }
 
   createEmptyLiveState() {
@@ -166,49 +185,8 @@ export class TalkTalkWorker {
       await this.stop();
     }
 
-    const { chromium } = await this.ensurePlaywright();
-    const userDataDir = resolvePath(
-      this.rootDir,
-      account.talktalk.userDataDir ?? `storage/browser-profile/${account.id}`
-    );
-    const storageStatePath = resolvePath(
-      this.rootDir,
-      account.talktalk.storageStatePath ?? process.env.TALKTALK_STORAGE_STATE_PATH
-    );
-    const browserChannel =
-      process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? account.talktalk.browserChannel;
-    const headless =
-      process.env.PLAYWRIGHT_HEADLESS != null
-        ? truthy(process.env.PLAYWRIGHT_HEADLESS)
-        : Boolean(account.talktalk.headless || process.env.RENDER);
-    const launchOptions = {
-      channel: browserChannel || undefined,
-      headless
-    };
-
-    if (storageStatePath) {
-      try {
-        await fs.access(storageStatePath);
-      } catch {
-        throw new Error(
-          `storageState 파일을 찾지 못했습니다: ${storageStatePath}`
-        );
-      }
-
-      this.browser = await chromium.launch(launchOptions);
-      this.context = await this.browser.newContext({
-        storageState: storageStatePath
-      });
-      this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    } else {
-      this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
-      this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    }
-
-    await this.page.goto(this.resolveLiveListUrl(account), {
-      waitUntil: "domcontentloaded"
-    });
-    await this.page.waitForLoadState("networkidle").catch(() => {});
+    this.selectorConfig = await this.loadSelectorConfig(account);
+    await this.openBrowserSession(account);
 
     this.currentAccountId = account.id;
     this.currentAccountName = account.name;
@@ -237,23 +215,14 @@ export class TalkTalkWorker {
       this.timer = null;
     }
 
-    if (this.context) {
-      await this.context.close();
-      this.context = null;
-    }
-
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
-    }
-
-    this.page = null;
+    await this.closeBrowserSession();
     this.currentAccountId = null;
     this.currentAccountName = null;
     this.selectedConversationUserId = null;
     this.manualSelection = false;
     this.lastSuggestionSignature = null;
     this.liveState = this.createEmptyLiveState();
+    this.selectorConfig = null;
     return this.getStatus();
   }
 
@@ -270,8 +239,15 @@ export class TalkTalkWorker {
       );
     }
 
-    const config = await this.loadSelectorConfig(account);
-    const liveConfig = config.live ?? {};
+    if (
+      this.browserRecycleTicks > 0 &&
+      this.tickCount > 1 &&
+      this.tickCount % this.browserRecycleTicks === 0
+    ) {
+      await this.recycleBrowserSession(account);
+    }
+
+    const liveConfig = this.selectorConfig?.live ?? {};
     await this.dismissMonitorPopups(liveConfig);
 
     let conversations = await this.extractConversationList(liveConfig, account);
@@ -360,9 +336,142 @@ export class TalkTalkWorker {
     await this.page.goto(this.resolveLiveDetailUrl(userId, account), {
       waitUntil: "domcontentloaded"
     });
-    await this.page.waitForLoadState("networkidle").catch(() => {});
+    await this.waitForLivePage(liveConfig);
     await this.tick({ forceSuggestion: true });
     return this.getLiveOverview();
+  }
+
+  async openBrowserSession(account) {
+    const { chromium } = await this.ensurePlaywright();
+    const userDataDir = resolvePath(
+      this.rootDir,
+      account.talktalk.userDataDir ?? `storage/browser-profile/${account.id}`
+    );
+    const storageStatePath = resolvePath(
+      this.rootDir,
+      account.talktalk.storageStatePath ?? process.env.TALKTALK_STORAGE_STATE_PATH
+    );
+    const browserChannel =
+      process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? account.talktalk.browserChannel;
+    const headless =
+      process.env.PLAYWRIGHT_HEADLESS != null
+        ? truthy(process.env.PLAYWRIGHT_HEADLESS)
+        : Boolean(account.talktalk.headless || process.env.RENDER);
+    const launchOptions = {
+      channel: browserChannel || undefined,
+      headless,
+      args: [
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-component-extensions-with-background-pages",
+        "--mute-audio",
+        "--no-first-run",
+        "--no-default-browser-check"
+      ]
+    };
+    const contextOptions = {
+      serviceWorkers: "block",
+      viewport: {
+        width: 1280,
+        height: 720
+      }
+    };
+
+    if (storageStatePath) {
+      try {
+        await fs.access(storageStatePath);
+      } catch {
+        throw new Error(
+          `storageState 파일을 찾지 못했습니다: ${storageStatePath}`
+        );
+      }
+
+      this.browser = await chromium.launch(launchOptions);
+      this.context = await this.browser.newContext({
+        ...contextOptions,
+        storageState: storageStatePath
+      });
+      await this.configureContext();
+      this.page = this.context.pages()[0] ?? (await this.context.newPage());
+    } else {
+      this.context = await chromium.launchPersistentContext(userDataDir, {
+        ...launchOptions,
+        ...contextOptions
+      });
+      await this.configureContext();
+      this.page = this.context.pages()[0] ?? (await this.context.newPage());
+      this.browser = this.context.browser();
+    }
+
+    await this.page.goto(this.resolveLiveListUrl(account), {
+      waitUntil: "domcontentloaded"
+    });
+    await this.waitForLivePage(this.selectorConfig?.live ?? {});
+  }
+
+  async closeBrowserSession() {
+    if (this.context) {
+      await this.context.close().catch(() => {});
+      this.context = null;
+    }
+
+    if (this.browser) {
+      await this.browser.close().catch(() => {});
+      this.browser = null;
+    }
+
+    this.page = null;
+  }
+
+  async recycleBrowserSession(account) {
+    const preservedConversationUserId = this.selectedConversationUserId;
+    const preservedManualSelection = this.manualSelection;
+    await this.closeBrowserSession();
+    await this.openBrowserSession(account);
+    this.selectedConversationUserId = preservedConversationUserId;
+    this.manualSelection = preservedManualSelection;
+    this.lastSuggestionSignature = null;
+  }
+
+  async configureContext() {
+    if (!this.context) {
+      return;
+    }
+
+    this.context.setDefaultTimeout(4000);
+    this.context.setDefaultNavigationTimeout(15000);
+    await this.context.route("**/*", (route) => {
+      const request = route.request();
+      const resourceType = request.resourceType();
+      const url = request.url().toLowerCase();
+
+      if (["image", "media", "font"].includes(resourceType)) {
+        return route.abort();
+      }
+
+      if (
+        /google-analytics|googletagmanager|doubleclick|hotjar|mixpanel|amplitude|beusable/.test(
+          url
+        )
+      ) {
+        return route.abort();
+      }
+
+      return route.continue();
+    });
+  }
+
+  async waitForLivePage(liveConfig) {
+    if (!this.page) {
+      return;
+    }
+
+    const selector = liveConfig.conversationRows ?? "body";
+    await this.page.waitForSelector(selector, { timeout: 10000 }).catch(() => {});
   }
 
   pickConversationToOpen(conversations) {
@@ -418,7 +527,7 @@ export class TalkTalkWorker {
 
   async extractConversationList(liveConfig, account) {
     const rows = this.page.locator(liveConfig.conversationRows);
-    const rowCount = await rows.count();
+    const rowCount = Math.min(await rows.count(), this.maxConversationList);
     const sellerName = normalizeSnippet(account.talktalk.sourceName || account.name);
     const partnerCode = this.getPartnerCode(account);
     const conversations = [];
@@ -488,15 +597,16 @@ export class TalkTalkWorker {
       }
     }
 
-    const productNames = deriveProductNamesFromMessages(messages);
+    const compactMessages = compressMessages(messages, this.maxMessageHistory);
+    const productNames = deriveProductNamesFromMessages(compactMessages);
     const customerName =
       normalizeSnippet(nextData?.props?.pageProps?.chatInfo?.info?.name) ||
       normalizeSnippet(await this.readOptionalText(this.page, liveConfig.customerName)) ||
       listItem?.customerName ||
       "고객";
 
-    const preview = normalizeSnippet(lastOf(messages)?.text ?? listItem?.preview ?? "");
-    const pendingCustomerText = buildPendingCustomerText(messages);
+    const preview = normalizeSnippet(lastOf(compactMessages)?.text ?? listItem?.preview ?? "");
+    const pendingCustomerText = buildPendingCustomerText(compactMessages);
 
     return {
       id: createLiveConversationId(partnerCode, userId),
@@ -511,7 +621,7 @@ export class TalkTalkWorker {
       preview,
       productNames,
       purchaseHistory: [],
-      messages,
+      messages: compactMessages,
       awaitingReply: Boolean(pendingCustomerText),
       pendingCustomerText,
       unreadCount: listItem?.unreadCount ?? 0,

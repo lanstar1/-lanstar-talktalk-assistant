@@ -142,16 +142,15 @@ function rankConversations(conversations) {
 }
 
 export class KnowledgeBaseStore {
-  constructor({ policies, qnaExamples, conversations, retrievalExamples }) {
+  constructor({ policies, qnaCount, conversations, retrievalExamples }) {
     this.policies = policies;
-    this.qnaExamples = qnaExamples;
     this.conversations = rankConversations(conversations);
     this.retrievalExamples = retrievalExamples;
     this.conversationMap = new Map(
       this.conversations.map((conversation) => [conversation.id, conversation])
     );
     this.stats = {
-      qnaCount: qnaExamples.length,
+      qnaCount,
       conversationCount: this.conversations.length,
       retrievalCount: retrievalExamples.length,
       productCount: unique(
@@ -259,7 +258,7 @@ export async function loadKnowledgeBase(rootDir) {
 
   return new KnowledgeBaseStore({
     policies,
-    qnaExamples,
+    qnaCount: qnaExamples.length,
     conversations,
     retrievalExamples
   });

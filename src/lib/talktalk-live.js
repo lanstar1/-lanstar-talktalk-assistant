@@ -125,6 +125,31 @@ export function buildMessageSignature(messages = []) {
     .join("|");
 }
 
+export function compressMessages(messages = [], maxMessages = 40) {
+  const collapsed = [];
+
+  for (const message of messages) {
+    const role = normalizeSnippet(message?.role);
+    const text = normalizeSnippet(message?.text);
+    if (!role || !text) {
+      continue;
+    }
+
+    const previous = collapsed[collapsed.length - 1];
+    if (previous && previous.role === role && previous.text === text) {
+      continue;
+    }
+
+    collapsed.push({ role, text });
+  }
+
+  if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
+    return collapsed;
+  }
+
+  return collapsed.slice(-maxMessages);
+}
+
 export function deriveProductNamesFromMessages(messages = []) {
   const candidates = [];
 

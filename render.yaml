@@ -2,7 +2,7 @@ services:
   - type: web
     name: lanstar-talktalk-assistant
     runtime: docker
-    plan: starter
+    plan: standard
     healthCheckPath: /healthz
     disk:
       name: lanstar-storage
@@ -15,6 +15,14 @@ services:
         value: 0.0.0.0
       - key: PLAYWRIGHT_HEADLESS
         value: "true"
+      - key: TALKTALK_AUTOSTART
+        value: "true"
+      - key: TALKTALK_MAX_CONVERSATIONS
+        value: "30"
+      - key: TALKTALK_MAX_MESSAGES
+        value: "40"
+      - key: TALKTALK_BROWSER_RECYCLE_TICKS
+        value: "90"
       - key: LLM_PROVIDER
         value: openai
       - key: LLM_MODEL

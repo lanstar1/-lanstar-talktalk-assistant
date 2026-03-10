@@ -37,6 +37,20 @@ const worker = new TalkTalkWorker({
   getSettings: () => settings
 });
 
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").toLowerCase());
+}
+
+function getMemoryStats() {
+  const memory = process.memoryUsage();
+  return {
+    rssMb: Math.round((memory.rss / 1024 / 1024) * 10) / 10,
+    heapUsedMb: Math.round((memory.heapUsed / 1024 / 1024) * 10) / 10,
+    heapTotalMb: Math.round((memory.heapTotal / 1024 / 1024) * 10) / 10,
+    externalMb: Math.round((memory.external / 1024 / 1024) * 10) / 10
+  };
+}
+
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8"
@@ -98,6 +112,9 @@ function bootstrapPayload() {
   return {
     ok: true,
     stats: store.stats,
+    system: {
+      memory: getMemoryStats()
+    },
     settings,
     activeAccount: getActiveAccount(settings),
     llmStatus: engine.getLlmStatus(),
@@ -153,7 +170,8 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         ok: true,
         uptime: process.uptime(),
-        llmStatus: engine.getLlmStatus()
+        llmStatus: engine.getLlmStatus(),
+        memory: getMemoryStats()
       });
       return;
     }
@@ -320,4 +338,10 @@ server.listen(port, host, () => {
   process.stdout.write(
     `Lanstar TalkTalk Assistant listening on http://${host}:${port}\n`
   );
+
+  if (truthy(process.env.TALKTALK_AUTOSTART)) {
+    worker.start().catch((error) => {
+      process.stderr.write(`[autostart] ${error.message}\n`);
+    });
+  }
 });

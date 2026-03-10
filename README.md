@@ -64,10 +64,22 @@ OPENAI_API_KEY=your_api_key npm run dev
 
 - `HOST=0.0.0.0`
 - `PLAYWRIGHT_HEADLESS=true`
+- `TALKTALK_AUTOSTART=true`
+- `TALKTALK_MAX_CONVERSATIONS=30`
+- `TALKTALK_MAX_MESSAGES=40`
+- `TALKTALK_BROWSER_RECYCLE_TICKS=90`
 - `LLM_PROVIDER=openai`
 - `LLM_MODEL=gpt-4.1-mini`
 - `TALKTALK_STORAGE_STATE_PATH=/opt/render/project/src/storage/talktalk-account-1.state.json`
 - `ADMIN_UPLOAD_TOKEN` (세션 파일 업로드용 관리자 토큰)
+
+메모리 안정화 기준:
+
+- Render 인스턴스는 `standard` 이상 권장
+- 브라우저는 이미지 / 폰트 / 미디어 리소스를 차단
+- 실시간 목록은 최근 30개 대화만 유지
+- 현재 대화 메시지는 최근 40개만 유지
+- 브라우저 세션은 90틱마다 자동 재기동
 
 ## 톡톡 로그인 세션 준비
 

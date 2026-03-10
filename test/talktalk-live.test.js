@@ -5,6 +5,7 @@ import {
   buildLiveChatDetailUrl,
   buildLiveChatListUrl,
   buildPendingCustomerText,
+  compressMessages,
   createLiveConversationId,
   deriveProductNamesFromMessages,
   extractUserIdFromChatHref,
@@ -84,5 +85,25 @@ test("메시지에서 제품명과 모델명을 뽑아낸다", () => {
       }
     ]),
     ["[LANstar] USB to HDMI 듀얼 모니터 컨버터 [30949]", "LS-UH319D-N"]
+  );
+});
+
+test("연속으로 중복된 메시지는 압축하고 최근 메시지만 유지한다", () => {
+  assert.deepEqual(
+    compressMessages(
+      [
+        { role: "seller", text: "안내문" },
+        { role: "seller", text: "안내문" },
+        { role: "customer", text: "문의 1" },
+        { role: "customer", text: "문의 2" },
+        { role: "seller", text: "답변" }
+      ],
+      3
+    ),
+    [
+      { role: "customer", text: "문의 1" },
+      { role: "customer", text: "문의 2" },
+      { role: "seller", text: "답변" }
+    ]
   );
 });
