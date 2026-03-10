@@ -56,6 +56,7 @@ OPENAI_API_KEY=your_api_key npm run dev
 - `LLM_PROVIDER=openai`
 - `LLM_MODEL=gpt-4.1-mini`
 - `TALKTALK_STORAGE_STATE_PATH=/opt/render/project/src/storage/talktalk-account-1.state.json`
+- `ADMIN_UPLOAD_TOKEN` (세션 파일 업로드용 관리자 토큰)
 
 ## 톡톡 로그인 세션 준비
 
@@ -76,6 +77,11 @@ npm run export-storage-state
 
 - `TALKTALK_STORAGE_STATE_PATH`
 - `PLAYWRIGHT_BROWSER_CHANNEL`
+
+Render 디스크 업로드가 필요하면 관리자 토큰을 설정한 뒤 아래 API를 사용할 수 있습니다.
+
+- `POST /api/admin/storage-state`
+- `GET /api/admin/storage-state-status`
 
 ## 운영 흐름
 

@@ -8,6 +8,11 @@ import { loadKnowledgeBase } from "./lib/data-store.js";
 import { LlmClient } from "./lib/llm-client.js";
 import { ReplyEngine } from "./lib/reply-engine.js";
 import { getActiveAccount, loadSettings, saveSettings } from "./lib/settings.js";
+import {
+  isUploadAuthorized,
+  isValidStorageState,
+  resolveStorageStatePath
+} from "./lib/storage-state.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,6 +61,34 @@ async function parseBody(request) {
 
   const raw = Buffer.concat(chunks).toString("utf8");
   return JSON.parse(raw);
+}
+
+function getAdminUploadToken() {
+  return process.env.ADMIN_UPLOAD_TOKEN ?? null;
+}
+
+function getStorageStateStatus() {
+  const statePath = resolveStorageStatePath(rootDir);
+  return fs
+    .stat(statePath)
+    .then((stat) => ({
+      exists: true,
+      path: statePath,
+      size: stat.size,
+      updatedAt: stat.mtime.toISOString()
+    }))
+    .catch((error) => {
+      if (error.code === "ENOENT") {
+        return {
+          exists: false,
+          path: statePath,
+          size: 0,
+          updatedAt: null
+        };
+      }
+
+      throw error;
+    });
 }
 
 function bootstrapPayload() {
@@ -169,6 +202,50 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && pathname === "/api/automation/status") {
       sendJson(response, 200, { ok: true, automation: worker.getStatus() });
+      return;
+    }
+
+    if (pathname.startsWith("/api/admin/")) {
+      const uploadToken = getAdminUploadToken();
+      if (!uploadToken) {
+        sendError(response, 404, "관리자 업로드 기능이 비활성화되어 있습니다.");
+        return;
+      }
+
+      if (!isUploadAuthorized(request.headers, uploadToken)) {
+        sendError(response, 401, "관리자 인증에 실패했습니다.");
+        return;
+      }
+    }
+
+    if (request.method === "GET" && pathname === "/api/admin/storage-state-status") {
+      sendJson(response, 200, {
+        ok: true,
+        storageState: await getStorageStateStatus()
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/admin/storage-state") {
+      const body = await parseBody(request);
+      if (!isValidStorageState(body)) {
+        sendError(response, 400, "storageState 형식이 올바르지 않습니다.");
+        return;
+      }
+
+      const statePath = resolveStorageStatePath(rootDir);
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
+      await fs.writeFile(`${statePath}.tmp`, JSON.stringify(body, null, 2), "utf8");
+      await fs.rename(`${statePath}.tmp`, statePath);
+
+      sendJson(response, 200, {
+        ok: true,
+        storageState: {
+          ...(await getStorageStateStatus()),
+          cookies: body.cookies.length,
+          origins: body.origins.length
+        }
+      });
       return;
     }
 

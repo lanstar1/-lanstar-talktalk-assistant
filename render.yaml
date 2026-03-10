@@ -23,3 +23,5 @@ services:
         sync: false
       - key: TALKTALK_STORAGE_STATE_PATH
         value: /opt/render/project/src/storage/talktalk-account-1.state.json
+      - key: ADMIN_UPLOAD_TOKEN
+        sync: false
