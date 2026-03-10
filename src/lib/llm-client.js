@@ -29,6 +29,30 @@ function parseJsonObject(text = "") {
   }
 }
 
+function parseRetryAfterMs(value) {
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const retryAt = Date.parse(String(value ?? ""));
+  if (Number.isFinite(retryAt)) {
+    return Math.max(0, retryAt - Date.now());
+  }
+
+  return null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatErrorMessage(status, statusText, detail = "") {
+  return detail
+    ? `LLM 요청 실패 (${status} ${statusText}): ${detail}`
+    : `LLM 요청 실패 (${status} ${statusText})`;
+}
+
 function buildPromptPayload(context) {
   return {
     brandName: context.brandName,
@@ -111,6 +135,13 @@ export class LlmClient {
     this.maxTokens = Number(
       config.maxTokens ?? process.env.LLM_MAX_TOKENS ?? 700
     );
+    this.retryDelaysMs = (
+      Array.isArray(config.retryDelaysMs)
+        ? config.retryDelaysMs
+        : String(process.env.LLM_RETRY_DELAYS_MS ?? "800,1800").split(",")
+    )
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value >= 0);
     this.enabled =
       config.enabled ?? truthy(process.env.LLM_ENABLED ?? (provider !== "none"));
   }
@@ -159,42 +190,67 @@ export class LlmClient {
   }
 
   async requestOpenAiCompatible(systemPrompt, userPrompt) {
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      signal: AbortSignal.timeout(this.timeoutMs),
-      body: JSON.stringify({
-        model: this.model,
-        temperature: this.temperature,
-        max_tokens: this.maxTokens,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ]
-      })
-    });
+    const retryableStatusCodes = new Set([408, 409, 429, 500, 502, 503, 504]);
 
-    if (!response.ok) {
-      throw new Error(
-        `LLM 요청 실패 (${response.status} ${response.statusText})`
+    for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt += 1) {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        signal: AbortSignal.timeout(this.timeoutMs),
+        body: JSON.stringify({
+          model: this.model,
+          temperature: this.temperature,
+          max_tokens: this.maxTokens,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ]
+        })
+      });
+
+      const rawBody = await response.text();
+      if (response.ok) {
+        const payload = parseJsonObject(rawBody);
+        const content =
+          payload?.choices?.[0]?.message?.content ??
+          payload?.choices?.[0]?.text ??
+          "";
+        const parsed = parseJsonObject(content);
+        if (!parsed?.replyText) {
+          throw new Error("LLM 응답에서 replyText를 읽지 못했습니다.");
+        }
+
+        return parsed;
+      }
+
+      const errorPayload = parseJsonObject(rawBody);
+      const detail =
+        errorPayload?.error?.message ??
+        errorPayload?.message ??
+        rawBody.trim();
+      const error = new Error(
+        formatErrorMessage(response.status, response.statusText, detail)
       );
-    }
 
-    const payload = await response.json();
-    const content =
-      payload.choices?.[0]?.message?.content ??
-      payload.choices?.[0]?.text ??
-      "";
-    const parsed = parseJsonObject(content);
-    if (!parsed?.replyText) {
-      throw new Error("LLM 응답에서 replyText를 읽지 못했습니다.");
-    }
+      if (
+        attempt < this.retryDelaysMs.length &&
+        retryableStatusCodes.has(response.status)
+      ) {
+        const retryAfterMs =
+          parseRetryAfterMs(response.headers.get("retry-after")) ??
+          this.retryDelaysMs[attempt];
+        if (retryAfterMs > 0) {
+          await sleep(retryAfterMs);
+        }
+        continue;
+      }
 
-    return parsed;
+      throw error;
+    }
   }
 
   async requestOllama(systemPrompt, userPrompt) {

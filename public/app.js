@@ -186,7 +186,7 @@ function renderLlmStatus(llmStatus, suggestion = null) {
   }
 
   if (suggestion.llm?.error) {
-    elements.llmStatusText.textContent = `${base} / 호출 실패: ${suggestion.llm.error}`;
+    elements.llmStatusText.textContent = `${base} / 보강 실패, 기본 초안 사용: ${suggestion.llm.error}`;
     return;
   }
 

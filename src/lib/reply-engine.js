@@ -723,6 +723,19 @@ export class ReplyEngine {
 
     const normalizedQuestion = normalizeText(context.customerText);
     const topScore = context.matches[0]?.score ?? 0;
+    const strongestSignalOverlap = Math.max(
+      0,
+      ...context.matches.map((match) =>
+        countSharedSignals(context.supportSignals, match.exampleSignals)
+      )
+    );
+    const strongContextualCoverage =
+      suggestion.generationSource === "retrieval_contextual" &&
+      context.matches.length > 0 &&
+      topScore >= 0.76 &&
+      (!context.modelIdentifiers.length || context.matches[0]?.exactModelMatch) &&
+      (!context.supportSignals.length ||
+        strongestSignalOverlap >= Math.min(2, context.supportSignals.length));
     const answerLength = cleanAnswer(context.body).length;
     const reasoningKeywords = [
       "안되",
@@ -741,6 +754,10 @@ export class ReplyEngine {
 
     if (!context.matches.length) {
       return "no_history";
+    }
+
+    if (strongContextualCoverage) {
+      return null;
     }
 
     if (suggestion.confidence < llmSettings.enhanceWhenConfidenceBelow) {
