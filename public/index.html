@@ -11,77 +11,133 @@
       <aside class="sidebar">
         <div class="brand-card">
           <p class="eyebrow">Lanstar Control Room</p>
-          <h1>톡톡 상담 자동화</h1>
+          <h1>톡톡 운영 대시보드</h1>
           <p class="subtle">
-            Q&A 4,077건과 상담 이력 2,406건 기준으로 초안을 생성합니다.
+            실시간 톡톡 모니터링, 초안 검토, 근거 확인을 한 흐름으로 정리했습니다.
           </p>
         </div>
 
-        <section class="panel metrics" id="metrics"></section>
-
-        <section class="panel">
-          <p class="label">LLM 보강 상태</p>
-          <p id="llmStatusText" class="subtle small">
-            설정 확인 중
-          </p>
-        </section>
-
-        <section class="panel">
-          <label class="label" for="searchInput">대화 검색</label>
-          <input id="searchInput" class="text-input" placeholder="고객명, 상품명, 문의 내용" />
-        </section>
-
-        <section class="panel">
-          <div class="panel-row">
+        <section class="panel control-panel">
+          <div class="panel-head">
             <div>
-              <p class="label">활성 채널</p>
-              <p class="subtle small">같은 네이버 로그인 안의 톡톡 채널을 선택합니다.</p>
+              <p class="eyebrow">Operations</p>
+              <h2>운영 제어</h2>
             </div>
-            <select id="accountSelect" class="select-input"></select>
           </div>
-          <div class="panel-row">
-            <div>
-              <p class="label">응답 모드</p>
-              <p class="subtle small">현재는 실시간 모니터링 테스트 중이라 고객 전송이 차단됩니다.</p>
-            </div>
-            <select id="modeSelect" class="select-input">
-              <option value="review">검토 후 전송</option>
-              <option value="auto">자동 전송</option>
-            </select>
-          </div>
+
+          <label class="label" for="accountSelect">활성 채널</label>
+          <select id="accountSelect" class="select-input"></select>
+
+          <label class="label" for="modeSelect">응답 모드</label>
+          <select id="modeSelect" class="select-input">
+            <option value="review">검토 후 전송</option>
+            <option value="auto">자동 전송</option>
+          </select>
+
           <div class="button-row">
             <button id="startAutomationButton" class="button primary">자동화 시작</button>
             <button id="stopAutomationButton" class="button ghost">중지</button>
           </div>
-          <p id="automationStatus" class="status-text">자동화 워커 정지 상태</p>
+
+          <div class="status-stack">
+            <div class="status-block">
+              <span class="status-label">실시간 상태</span>
+              <p id="automationStatus" class="status-text">자동화 워커 정지 상태</p>
+            </div>
+            <div class="status-block">
+              <span class="status-label">LLM 상태</span>
+              <p id="llmStatusText" class="status-text">설정 확인 중</p>
+            </div>
+          </div>
         </section>
 
-        <section class="panel conversation-panel">
-          <div class="panel-row">
-            <h2>대화 목록</h2>
-            <span id="conversationCount" class="badge"></span>
+        <section class="panel knowledge-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Knowledge</p>
+              <h2>학습 현황</h2>
+            </div>
           </div>
-          <div id="conversationList" class="conversation-list"></div>
+          <div class="metrics" id="metrics"></div>
         </section>
       </aside>
 
       <main class="main">
-        <section class="workspace">
-          <div class="thread-panel">
-            <div class="panel-header">
+        <section class="hero-card">
+          <div>
+            <p class="eyebrow">Admin Dashboard</p>
+            <h2>실시간 상담 흐름을 한눈에 확인합니다</h2>
+            <p class="subtle">
+              좌측에서 워커를 관리하고, 아래 작업영역에서 대화 선택, 초안 검토, 근거 확인 순으로 처리하세요.
+            </p>
+          </div>
+          <div class="hero-chips">
+            <span id="heroChannel" class="hero-chip">채널 미선택</span>
+            <span id="heroMonitor" class="hero-chip muted">워커 정지</span>
+            <span id="heroDraftState" class="hero-chip muted">초안 대기</span>
+          </div>
+        </section>
+
+        <section class="overview-grid">
+          <article class="overview-card">
+            <span class="overview-label">응답 대기</span>
+            <strong id="overviewQueue">0건</strong>
+            <p id="overviewQueueText" class="subtle small">실시간 대화를 기다리는 중</p>
+          </article>
+          <article class="overview-card">
+            <span class="overview-label">최근 동기화</span>
+            <strong id="overviewSync">대기 중</strong>
+            <p id="overviewSyncText" class="subtle small">자동화 시작 후 갱신됩니다</p>
+          </article>
+          <article class="overview-card">
+            <span class="overview-label">활성 채널</span>
+            <strong id="overviewChannel">-</strong>
+            <p id="overviewChannelText" class="subtle small">현재 선택된 톡톡 채널</p>
+          </article>
+          <article class="overview-card">
+            <span class="overview-label">초안 상태</span>
+            <strong id="overviewDraft">초안 대기</strong>
+            <p id="overviewDraftText" class="subtle small">새 문의가 들어오면 자동 갱신됩니다</p>
+          </article>
+        </section>
+
+        <section class="workbench">
+          <section class="panel queue-panel">
+            <div class="panel-head">
               <div>
-                <p class="eyebrow">Conversation</p>
-                <h2 id="customerName">대화를 선택해 주세요</h2>
+                <p class="eyebrow">Queue</p>
+                <h2>대화 큐</h2>
+              </div>
+              <span id="conversationCount" class="badge">0건</span>
+            </div>
+            <label class="label" for="searchInput">대화 검색</label>
+            <input id="searchInput" class="text-input" placeholder="고객명, 상품명, 문의 내용" />
+            <div id="conversationList" class="conversation-list"></div>
+          </section>
+
+          <section class="panel focus-panel">
+            <div class="focus-header">
+              <div>
+                <p class="eyebrow">Current Conversation</p>
+                <h2 id="customerName">실시간 대화를 선택해 주세요</h2>
               </div>
               <div id="orderSummary" class="order-summary">주문 정보 없음</div>
             </div>
-            <div id="productTags" class="tag-row"></div>
-            <div id="thread" class="thread"></div>
-          </div>
 
-          <div class="inspector">
-            <section class="panel">
-              <div class="panel-row">
+            <div id="productTags" class="tag-row"></div>
+
+            <div class="focus-tabs" role="tablist" aria-label="상담 작업영역">
+              <button class="tab-button active" data-focus-tab="thread" type="button">대화 보기</button>
+              <button class="tab-button" data-focus-tab="draft" type="button">초안 검토</button>
+              <button class="tab-button" data-focus-tab="evidence" type="button">근거 데이터</button>
+            </div>
+
+            <section class="focus-section active" data-focus-panel="thread">
+              <div id="thread" class="thread"></div>
+            </section>
+
+            <section class="focus-section" data-focus-panel="draft">
+              <div class="draft-toolbar">
                 <div>
                   <p class="eyebrow">Draft</p>
                   <h2>추천 답변</h2>
@@ -92,24 +148,30 @@
                   <button id="sendButton" class="button strong">검토 후 전송</button>
                 </div>
               </div>
+
               <div class="confidence-wrap">
                 <div class="confidence-track">
                   <div id="confidenceBar" class="confidence-bar"></div>
                 </div>
                 <span id="confidenceText" class="confidence-text">신뢰도 -</span>
               </div>
+
               <p id="draftHint" class="subtle small">
                 실시간 모니터링 테스트 중에는 고객 전송이 비활성화되며, 새 문의에 대한 초안만 자동 갱신됩니다.
               </p>
-              <textarea id="draftReply" class="draft-textarea" placeholder="추천 답변이 여기에 표시됩니다."></textarea>
-              <p id="reviewStatus" class="subtle small">
+              <textarea
+                id="draftReply"
+                class="draft-textarea"
+                placeholder="추천 답변이 여기에 표시됩니다."
+              ></textarea>
+              <p id="reviewStatus" class="review-note">
                 초안이 생성되면 내용을 확인하고 필요시 직접 수정한 뒤 검토 완료를 누르세요.
               </p>
               <div id="flagList" class="flag-list"></div>
             </section>
 
-            <section class="panel">
-              <div class="panel-row">
+            <section class="focus-section" data-focus-panel="evidence">
+              <div class="panel-head">
                 <div>
                   <p class="eyebrow">Evidence</p>
                   <h2>근거 데이터</h2>
@@ -118,7 +180,7 @@
               </div>
               <div id="evidenceList" class="evidence-list"></div>
             </section>
-          </div>
+          </section>
         </section>
       </main>
     </div>
@@ -136,4 +198,4 @@
 
     <script type="module" src="/app.js"></script>
   </body>
-  </html>
+</html>

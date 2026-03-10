@@ -9,6 +9,7 @@ const state = {
   currentSuggestion: null,
   settings: null,
   activeAccount: null,
+  activeFocusTab: "thread",
   pollTimer: null,
   reviewedDraftSignature: "",
   lastConversationListSignature: "",
@@ -22,6 +23,17 @@ const elements = {
   searchInput: document.querySelector("#searchInput"),
   accountSelect: document.querySelector("#accountSelect"),
   modeSelect: document.querySelector("#modeSelect"),
+  heroChannel: document.querySelector("#heroChannel"),
+  heroMonitor: document.querySelector("#heroMonitor"),
+  heroDraftState: document.querySelector("#heroDraftState"),
+  overviewQueue: document.querySelector("#overviewQueue"),
+  overviewQueueText: document.querySelector("#overviewQueueText"),
+  overviewSync: document.querySelector("#overviewSync"),
+  overviewSyncText: document.querySelector("#overviewSyncText"),
+  overviewChannel: document.querySelector("#overviewChannel"),
+  overviewChannelText: document.querySelector("#overviewChannelText"),
+  overviewDraft: document.querySelector("#overviewDraft"),
+  overviewDraftText: document.querySelector("#overviewDraftText"),
   automationStatus: document.querySelector("#automationStatus"),
   startAutomationButton: document.querySelector("#startAutomationButton"),
   stopAutomationButton: document.querySelector("#stopAutomationButton"),
@@ -41,7 +53,9 @@ const elements = {
   confidenceText: document.querySelector("#confidenceText"),
   evidenceList: document.querySelector("#evidenceList"),
   copyButton: document.querySelector("#copyButton"),
-  conversationItemTemplate: document.querySelector("#conversationItemTemplate")
+  conversationItemTemplate: document.querySelector("#conversationItemTemplate"),
+  focusTabButtons: Array.from(document.querySelectorAll("[data-focus-tab]")),
+  focusPanels: Array.from(document.querySelectorAll("[data-focus-panel]"))
 };
 
 function formatStatusTimestamp(value) {
@@ -67,6 +81,27 @@ function formatStatusTimestamp(value) {
   }).format(date);
 }
 
+function formatCompactTimestamp(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "대기 중";
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).format(date);
+}
+
 function isMonitorOnly() {
   return state.settings?.monitorOnly !== false;
 }
@@ -77,6 +112,24 @@ function hasLiveMonitor() {
 
 function getCurrentSearchQuery() {
   return elements.searchInput.value.trim();
+}
+
+function getAwaitingConversationCount() {
+  return state.conversations.filter(
+    (conversation) => conversation.awaitingReply || conversation.unreadCount > 0
+  ).length;
+}
+
+function getSuggestionSourceLabel(suggestion) {
+  return suggestion.generationSource === "llm_hybrid"
+    ? "LLM 보강"
+    : suggestion.generationSource === "retrieval_contextual"
+      ? "문맥 기반 초안"
+      : suggestion.generationSource === "policy"
+        ? "정책 응답"
+        : suggestion.generationSource === "retrieval"
+          ? "기존 이력 재사용"
+          : "기본 응답";
 }
 
 async function request(url, options = {}) {
@@ -132,6 +185,8 @@ function renderAccountSelect(settings) {
   if (state.activeAccount) {
     elements.accountSelect.value = state.activeAccount.id;
   }
+
+  renderDashboardSummary();
 }
 
 function renderLlmStatus(llmStatus, suggestion = null) {
@@ -165,8 +220,81 @@ function renderLlmStatus(llmStatus, suggestion = null) {
   elements.llmStatusText.textContent = `${base} / 이번 초안은 규칙+검색만 사용`;
 }
 
+function setHeroChipState(element, text, active) {
+  element.textContent = text;
+  element.classList.toggle("muted", !active);
+}
+
+function renderDashboardSummary() {
+  const activeChannel = state.activeAccount?.name ?? "채널 미선택";
+  const running = hasLiveMonitor();
+  const queueCount = getAwaitingConversationCount();
+  const syncValue = state.liveOverview?.updatedAt ?? null;
+  const reviewed =
+    Boolean(elements.draftReply.value.trim()) &&
+    Boolean(state.reviewedDraftSignature) &&
+    state.reviewedDraftSignature === getCurrentDraftSignature();
+  const sourceLabel = state.currentSuggestion
+    ? getSuggestionSourceLabel(state.currentSuggestion)
+    : "초안 대기";
+  const draftTitle = state.currentSuggestion
+    ? reviewed
+      ? "검토 완료"
+      : sourceLabel
+    : "초안 대기";
+  const draftDetail = state.currentSuggestion
+    ? reviewed
+      ? "운영자가 현재 초안을 확인했습니다"
+      : state.currentSuggestion.llm?.used
+        ? "LLM 보강 포함, 운영자 확인 필요"
+        : "초안 생성 완료, 검토 후 처리 필요"
+    : "새 문의가 들어오면 자동 갱신됩니다";
+
+  setHeroChipState(elements.heroChannel, activeChannel, Boolean(state.activeAccount));
+  setHeroChipState(
+    elements.heroMonitor,
+    running ? "실시간 동기화 중" : "워커 정지",
+    running
+  );
+  setHeroChipState(
+    elements.heroDraftState,
+    state.currentSuggestion ? draftTitle : "초안 대기",
+    Boolean(state.currentSuggestion)
+  );
+
+  elements.overviewQueue.textContent = `${queueCount}건`;
+  elements.overviewQueueText.textContent =
+    queueCount > 0 ? `미응답 또는 안읽음 대화 ${queueCount}건` : "현재 응답 대기 대화가 없습니다";
+
+  elements.overviewSync.textContent = syncValue
+    ? formatCompactTimestamp(syncValue)
+    : "대기 중";
+  elements.overviewSyncText.textContent = running
+    ? "실시간 워커가 최신 대화 상태를 읽는 중입니다"
+    : "자동화 시작 후 동기화 시각이 표시됩니다";
+
+  elements.overviewChannel.textContent = activeChannel;
+  elements.overviewChannelText.textContent = state.liveOverview?.partnerCode
+    ? `채널 코드 ${state.liveOverview.partnerCode}`
+    : "현재 선택된 톡톡 채널";
+
+  elements.overviewDraft.textContent = draftTitle;
+  elements.overviewDraftText.textContent = draftDetail;
+}
+
+function setActiveFocusTab(tabName) {
+  state.activeFocusTab = tabName;
+  for (const button of elements.focusTabButtons) {
+    button.classList.toggle("active", button.dataset.focusTab === tabName);
+  }
+  for (const panel of elements.focusPanels) {
+    panel.classList.toggle("active", panel.dataset.focusPanel === tabName);
+  }
+}
+
 function setConversationSource(conversations) {
   state.conversations = conversations;
+  renderDashboardSummary();
   applyFilter(getCurrentSearchQuery());
 }
 
@@ -176,6 +304,7 @@ function clearConversationSource() {
   state.reviewedDraftSignature = "";
   state.lastConversationListSignature = "";
   setConversationSource([]);
+  setActiveFocusTab("thread");
   elements.customerName.textContent = "실시간 대화를 기다리는 중";
   elements.orderSummary.textContent = "자동화 시작 후 현재 톡톡 대화가 표시됩니다";
   elements.productTags.innerHTML = "";
@@ -202,6 +331,10 @@ function updateReviewButtonState() {
       ? "운영자 검토 완료. 고객 전송은 계속 차단된 상태입니다."
       : "초안을 확인하고 필요하면 직접 수정한 뒤 검토 완료를 누르세요."
     : "초안이 생성되면 내용을 확인하고 필요시 직접 수정한 뒤 검토 완료를 누르세요.";
+
+  if (elements.overviewDraft) {
+    renderDashboardSummary();
+  }
 }
 
 function renderConversationList(conversations) {
@@ -273,6 +406,7 @@ function renderThread(conversation) {
     return;
   }
   state.lastThreadSignature = signature;
+  renderDashboardSummary();
   elements.customerName.textContent = conversation.customerName;
   elements.orderSummary.textContent = conversation.orderSummary;
   elements.productTags.innerHTML = "";
@@ -307,6 +441,7 @@ function resetSuggestionView() {
   elements.confidenceText.textContent = "신뢰도 -";
   renderLlmStatus(state.settings?.llmStatus);
   updateReviewButtonState();
+  renderDashboardSummary();
 }
 
 function updateSendButtonState() {
@@ -380,21 +515,13 @@ function renderSuggestion(suggestion) {
   renderFlags(suggestion.flags);
   renderEvidence(suggestion.evidence);
   elements.confidenceBar.style.width = `${Math.round(suggestion.confidence * 100)}%`;
-  const sourceLabel =
-    suggestion.generationSource === "llm_hybrid"
-      ? "LLM 보강"
-      : suggestion.generationSource === "retrieval_contextual"
-        ? "문맥 기반 초안"
-        : suggestion.generationSource === "policy"
-          ? "정책 응답"
-          : suggestion.generationSource === "retrieval"
-            ? "기존 이력 재사용"
-            : "기본 응답";
+  const sourceLabel = getSuggestionSourceLabel(suggestion);
   elements.confidenceText.textContent = `신뢰도 ${Math.round(
     suggestion.confidence * 100
   )}% / ${sourceLabel} / ${suggestion.canAutoSend ? "자동 발송 가능" : "검토 필요"}`;
   renderLlmStatus(state.settings?.llmStatus ?? suggestion.llm, suggestion);
   updateReviewButtonState();
+  renderDashboardSummary();
 }
 
 function applyFilter(query) {
@@ -419,15 +546,22 @@ function applyFilter(query) {
 
 function hydrateLiveConversation(live) {
   state.liveOverview = live;
+  renderDashboardSummary();
   if (!live?.running) {
     return;
+  }
+
+  if (live.selectedConversation) {
+    state.currentConversationId = live.selectedConversation.id;
+    state.currentConversation = live.selectedConversation;
+  } else {
+    state.currentConversationId = null;
+    state.currentConversation = null;
   }
 
   setConversationSource(live.conversations ?? []);
 
   if (live.selectedConversation) {
-    state.currentConversationId = live.selectedConversation.id;
-    state.currentConversation = live.selectedConversation;
     renderThread(live.selectedConversation);
   }
 
@@ -443,6 +577,7 @@ async function selectLiveConversation(conversationId) {
     method: "POST",
     body: JSON.stringify({ conversationId })
   });
+  setActiveFocusTab("thread");
   hydrateLiveConversation(payload.live);
   updateSendButtonState();
 }
@@ -478,6 +613,7 @@ async function generateSuggestion() {
     method: "POST",
     body: JSON.stringify(buildCurrentConversationRequestBody())
   });
+  setActiveFocusTab("draft");
   renderSuggestion(payload.suggestion);
 }
 
@@ -491,6 +627,7 @@ async function saveMode() {
   elements.modeSelect.disabled = isMonitorOnly();
   updateSendButtonState();
   renderLlmStatus(state.settings.llmStatus ?? state.currentSuggestion?.llm);
+  renderDashboardSummary();
 }
 
 async function saveActiveAccount() {
@@ -507,6 +644,7 @@ async function saveActiveAccount() {
   if (!hasLiveMonitor()) {
     clearConversationSource();
   }
+  renderDashboardSummary();
 }
 
 async function refreshLiveOverview() {
@@ -540,6 +678,8 @@ async function refreshAutomationStatus() {
   if (!automation.running) {
     clearConversationSource();
   }
+
+  renderDashboardSummary();
 
   return automation;
 }
@@ -575,6 +715,7 @@ async function markDraftReviewed() {
 
   state.reviewedDraftSignature = getCurrentDraftSignature();
   updateReviewButtonState();
+  renderDashboardSummary();
   elements.automationStatus.textContent =
     "현재 초안을 운영자 검토 완료로 표시했습니다. 고객 전송은 차단 상태입니다.";
 }
@@ -625,6 +766,7 @@ async function bootstrap() {
   renderLlmStatus(payload.llmStatus);
   updateSendButtonState();
   updateReviewButtonState();
+  renderDashboardSummary();
   startPolling();
 
   await refreshAutomationStatus();
@@ -650,6 +792,11 @@ elements.startAutomationButton.addEventListener("click", startAutomation);
 elements.stopAutomationButton.addEventListener("click", stopAutomation);
 elements.copyButton.addEventListener("click", copyDraft);
 elements.draftReply.addEventListener("input", updateReviewButtonState);
+for (const button of elements.focusTabButtons) {
+  button.addEventListener("click", () => {
+    setActiveFocusTab(button.dataset.focusTab);
+  });
+}
 
 bootstrap().catch((error) => {
   elements.automationStatus.textContent = error.message;
