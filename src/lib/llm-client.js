@@ -36,6 +36,7 @@ function buildPromptPayload(context) {
     customerName: context.customerName,
     customerQuestion: context.customerText,
     productNames: context.productNames,
+    supportSignals: context.supportSignals ?? [],
     detectedModelIdentifiers: context.modelIdentifiers ?? [],
     recentMessages: context.messages.slice(-6),
     purchaseSummary: context.purchaseSummary,

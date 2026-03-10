@@ -4,6 +4,7 @@ import {
   extractModelIdentifiers,
   extractOrderStatuses,
   extractProductNames,
+  extractSupportSignals,
   normalizeText,
   normalizeWhitespace,
   scoreSearch,
@@ -71,6 +72,168 @@ function hasSharedModel(left = [], right = []) {
   return left.some((item) => rightSet.has(item));
 }
 
+function countSharedSignals(left = [], right = []) {
+  if (!left.length || !right.length) {
+    return 0;
+  }
+
+  const rightSet = new Set(right);
+  return left.filter((item) => rightSet.has(item)).length;
+}
+
+function includesSignal(signals = [], targets = []) {
+  return targets.some((target) => signals.includes(target));
+}
+
+function detectProductContext(productNames = []) {
+  const normalized = normalizeText(productNames.join(" "));
+
+  return {
+    requiresDriver:
+      (normalized.includes("usb3.0") && normalized.includes("hdmi")) ||
+      normalized.includes("displaylink"),
+    requiresAltMode:
+      (normalized.includes("usb-c") ||
+        normalized.includes("type-c") ||
+        normalized.includes("c타입")) &&
+      (normalized.includes("hdmi") ||
+        normalized.includes("displayport") ||
+        normalized.includes("dp")) &&
+      !normalized.includes("displaylink") &&
+      !normalized.includes("usb3.0")
+  };
+}
+
+function collectActionHints(matches = []) {
+  const hints = new Set();
+
+  for (const match of matches) {
+    const text = normalizeText(
+      [
+        match.example.customerText,
+        match.example.answerText,
+        match.example.productName
+      ].join(" ")
+    );
+
+    if (
+      text.includes("드라이버") ||
+      text.includes("프로그램 설치") ||
+      text.includes("재설치")
+    ) {
+      hints.add("driver");
+    }
+
+    if (
+      text.includes("다른 컴퓨터") ||
+      text.includes("다른 usb") ||
+      text.includes("다른 포트") ||
+      text.includes("직접 연결") ||
+      text.includes("재연결")
+    ) {
+      hints.add("other_port");
+    }
+
+    if (text.includes("케이블") || text.includes("hdmi") || text.includes("모니터")) {
+      hints.add("cable");
+    }
+
+    if (
+      text.includes("디스플레이 설정") ||
+      text.includes("장치관리자") ||
+      text.includes("장치 관리자") ||
+      text.includes("해상도") ||
+      text.includes("인식")
+    ) {
+      hints.add("display_settings");
+    }
+
+    if (text.includes("재부팅")) {
+      hints.add("reboot");
+    }
+
+    if (text.includes("alt mode") || text.includes("display alt mode")) {
+      hints.add("alt_mode");
+    }
+  }
+
+  return [...hints];
+}
+
+function buildTechnicalRetrievalReply({
+  customerText,
+  productNames,
+  supportSignals,
+  productContext,
+  actionHints
+}) {
+  let opening = "문의주신 증상으로 보아 우선 연결 상태와 설치 상태를 먼저 점검해 보시는 것이 좋습니다.";
+  if (
+    includesSignal(supportSignals, ["display_no_signal"]) &&
+    includesSignal(supportSignals, ["recognition"])
+  ) {
+    opening = "제품 연결 후 모니터 화면이 나오지 않고 기기 인식도 되지 않는 증상으로 확인됩니다.";
+  } else if (includesSignal(supportSignals, ["display_no_signal"])) {
+    opening = "제품 연결 후 모니터 화면이 출력되지 않는 증상으로 확인됩니다.";
+  } else if (includesSignal(supportSignals, ["recognition"])) {
+    opening = "제품 연결 후 장치 인식이 원활하지 않은 증상으로 확인됩니다.";
+  } else if (includesSignal(supportSignals, ["driver"])) {
+    opening = "설치 또는 드라이버 관련 증상으로 확인됩니다.";
+  }
+
+  const steps = [];
+  const pushStep = (step) => {
+    if (step && !steps.includes(step)) {
+      steps.push(step);
+    }
+  };
+
+  pushStep(
+    "제품과 모니터, 케이블 연결 상태를 다시 확인하시고 가능하면 다른 케이블 또는 다른 포트로도 동일한지 먼저 확인 부탁드립니다."
+  );
+
+  if (productContext.requiresDriver || actionHints.includes("driver")) {
+    pushStep(
+      `${productNames[0] ?? "해당 모델"}은 드라이버 설치 또는 재설치 여부가 중요하니 설치 상태와 설치 후 재부팅 여부를 함께 확인 부탁드립니다.`
+    );
+  }
+
+  if (productContext.requiresAltMode || actionHints.includes("alt_mode")) {
+    pushStep(
+      "사용 중인 노트북이나 기기의 C타입 포트가 영상 출력(Display Alt Mode)을 지원하는 포트인지 확인 부탁드립니다."
+    );
+  }
+
+  if (
+    includesSignal(supportSignals, ["display_no_signal", "recognition", "resolution"]) ||
+    actionHints.includes("display_settings")
+  ) {
+    pushStep(
+      "PC의 디스플레이 설정 또는 장치관리자에서 추가 모니터나 USB 디스플레이 장치가 인식되는지도 확인 부탁드립니다."
+    );
+  }
+
+  if (actionHints.includes("other_port")) {
+    pushStep(
+      "가능하시면 다른 USB 포트 또는 다른 PC에서도 동일한 증상이 발생하는지 교차 테스트 부탁드립니다."
+    );
+  }
+
+  if (actionHints.includes("reboot")) {
+    pushStep("설치 또는 연결 변경 후에는 재부팅 뒤 다시 확인 부탁드립니다.");
+  }
+
+  const numberedSteps = steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+
+  return [
+    opening,
+    numberedSteps,
+    "위 항목 확인 후에도 동일하면 사용 중인 PC/노트북 모델명, 운영체제, 연결 구성과 확인하신 결과를 남겨주시면 추가로 확인해 드리겠습니다."
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export class ReplyEngine {
   constructor({ examples, policies, llmClient = null, getSettings = null }) {
     this.examples = examples;
@@ -101,7 +264,13 @@ export class ReplyEngine {
     };
   }
 
-  findMatches(customerText, productNames = [], modelIdentifiers = [], limit = 3) {
+  findMatches(
+    customerText,
+    productNames = [],
+    modelIdentifiers = [],
+    supportSignals = [],
+    limit = 3
+  ) {
     const queryIndex = buildSearchIndexParts(customerText);
     const normalizedProducts = productNames.map((name) => normalizeText(name));
 
@@ -113,7 +282,15 @@ export class ReplyEngine {
         const exampleModels =
           example.modelIdentifiers ??
           extractModelIdentifiers(example.productName, example.customerText);
+        const exampleSignals =
+          example.supportSignals ??
+          extractSupportSignals(
+            example.productName,
+            example.customerText,
+            example.answerText
+          );
         const exactModelMatch = hasSharedModel(modelIdentifiers, exampleModels);
+        const sharedSupportCount = countSharedSignals(supportSignals, exampleSignals);
         const productBonus =
           normalizedProducts.length &&
           normalizedProducts.some((name) =>
@@ -122,12 +299,37 @@ export class ReplyEngine {
             ? 0.12
             : 0;
         const modelBonus = exactModelMatch ? 0.45 : 0;
+        const supportBonus = sharedSupportCount ? Math.min(0.24, sharedSupportCount * 0.1) : 0;
+        let supportPenalty = 0;
+
+        if (supportSignals.length && !sharedSupportCount) {
+          supportPenalty += 0.16;
+        }
+
+        if (
+          includesSignal(supportSignals, ["display_no_signal", "recognition"]) &&
+          !includesSignal(exampleSignals, ["display_no_signal", "recognition", "driver", "resolution"])
+        ) {
+          supportPenalty += 0.16;
+        }
+
+        if (
+          includesSignal(exampleSignals, ["rotation"]) &&
+          !includesSignal(supportSignals, ["rotation"])
+        ) {
+          supportPenalty += 0.18;
+        }
 
         return {
           example,
           exampleModels,
+          exampleSignals,
           exactModelMatch,
-          score: scoreSearch(queryIndex, exampleSearchIndex, productBonus + modelBonus)
+          score: scoreSearch(
+            queryIndex,
+            exampleSearchIndex,
+            productBonus + modelBonus + supportBonus - supportPenalty
+          )
         };
       })
       .filter((item) => item.score > 0.12);
@@ -343,6 +545,18 @@ export class ReplyEngine {
     ].join("\n");
   }
 
+  shouldBuildTechnicalDraft(supportSignals = []) {
+    return includesSignal(supportSignals, [
+      "display_no_signal",
+      "recognition",
+      "driver",
+      "audio",
+      "power",
+      "resolution",
+      "alt_mode"
+    ]);
+  }
+
   buildBaseSuggestion({
     customerName = "고객",
     purchaseHistory = [],
@@ -369,6 +583,8 @@ export class ReplyEngine {
       ...extractProductNames(purchaseHistory),
       ...inputProductNames.map((name) => normalizeWhitespace(name))
     ]);
+    const supportSignals = extractSupportSignals(customerText, productNames);
+    const productContext = detectProductContext(productNames);
     const modelIdentifiers = extractModelIdentifiers(
       productNames,
       conversationMessages.map((message) => message.text)
@@ -382,7 +598,12 @@ export class ReplyEngine {
     );
     const matches =
       customerText && !needsModelConfirmation
-        ? this.findMatches(customerText, productNames, modelIdentifiers)
+        ? this.findMatches(
+            customerText,
+            productNames,
+            modelIdentifiers,
+            supportSignals
+          )
         : [];
 
     let body;
@@ -409,6 +630,18 @@ export class ReplyEngine {
       evidence = policyMatch.evidence;
       confidence = 0.98;
       generationSource = "policy";
+    } else if (matches.length && this.shouldBuildTechnicalDraft(supportSignals)) {
+      const actionHints = collectActionHints(matches);
+      body = buildTechnicalRetrievalReply({
+        customerText,
+        productNames,
+        supportSignals,
+        productContext,
+        actionHints
+      });
+      evidence = matches.map(buildEvidenceFromMatch);
+      confidence = Math.min(0.9, 0.5 + matches[0].score);
+      generationSource = "retrieval_contextual";
     } else if (matches.length) {
       body = cleanAnswer(matches[0].example.answerText);
       evidence = matches.map(buildEvidenceFromMatch);
@@ -424,6 +657,7 @@ export class ReplyEngine {
     const replyText = maybeAddGreetingAndClosing(body, this.policies);
     const canAutoSend =
       generationSource !== "model_required" &&
+      generationSource !== "retrieval_contextual" &&
       confidence >= 0.8 &&
       !flags.some((flag) => flag.reviewOnly) &&
       !(policyMatch && policyMatch.autoEligible === false);
@@ -433,6 +667,7 @@ export class ReplyEngine {
         customerName,
         customerText,
         productNames,
+        supportSignals,
         modelIdentifiers,
         replyText,
         evidence,
@@ -455,9 +690,11 @@ export class ReplyEngine {
         messages: conversationMessages,
         customerText,
         productNames,
+        supportSignals,
         modelIdentifiers,
         flags,
         policyMatch,
+        productContext,
         needsModelConfirmation,
         matches,
         confidence,
@@ -532,6 +769,7 @@ export class ReplyEngine {
       customerName: payload.customerName ?? suggestion.customerName,
       customerText: suggestion.customerText,
       productNames: suggestion.productNames,
+      supportSignals: context.supportSignals,
       modelIdentifiers: suggestion.modelIdentifiers,
       messages: context.messages,
       purchaseSummary: summarizePurchaseHistory(payload.purchaseHistory ?? []),

@@ -253,11 +253,14 @@ function resetSuggestionView() {
 }
 
 function updateSendButtonState() {
-  const disabled = Boolean(state.manualConversation);
+  const disabled = false;
   elements.sendButton.disabled = disabled;
-  elements.sendButton.title = disabled
-    ? "테스트 문의에서는 실제 전송이 비활성화됩니다."
+  elements.sendButton.title = state.manualConversation
+    ? "테스트 문의에서는 실제 톡톡 전송 대신 화면에 판매자 답변으로 반영됩니다."
     : "";
+  elements.sendButton.textContent = state.manualConversation
+    ? "테스트 반영"
+    : "검토 후 전송";
 }
 
 function renderFlags(flags = []) {
@@ -309,6 +312,8 @@ function renderSuggestion(suggestion) {
   const sourceLabel =
     suggestion.generationSource === "llm_hybrid"
       ? "LLM 보강"
+      : suggestion.generationSource === "retrieval_contextual"
+        ? "문맥 기반 초안"
       : suggestion.generationSource === "policy"
         ? "정책 응답"
         : suggestion.generationSource === "retrieval"
@@ -432,8 +437,19 @@ async function stopAutomation() {
 
 async function sendDraft() {
   if (state.manualConversation) {
+    const replyText = elements.draftReply.value.trim();
+    if (!replyText) {
+      elements.automationStatus.textContent = "반영할 답변이 없습니다.";
+      return;
+    }
+
+    state.manualConversation.messages.push({
+      role: "seller",
+      text: replyText
+    });
+    renderThread(state.manualConversation);
     elements.automationStatus.textContent =
-      "테스트 문의에서는 실제 전송이 비활성화됩니다.";
+      "테스트 문의에 판매자 답변으로 반영했습니다. 실제 톡톡에는 전송되지 않았습니다.";
     return;
   }
 

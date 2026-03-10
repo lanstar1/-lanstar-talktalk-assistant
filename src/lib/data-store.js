@@ -6,6 +6,7 @@ import {
   extractModelIdentifiers,
   extractPendingCustomerMessages,
   extractProductNames,
+  extractSupportSignals,
   isActionableCustomerText,
   latestOrderDate,
   messageRole,
@@ -22,11 +23,17 @@ function createRetrievalExample(example) {
     example.productName,
     example.customerText
   );
+  const supportSignals = extractSupportSignals(
+    example.productName,
+    example.customerText,
+    example.answerText
+  );
 
   return {
     ...example,
     searchIndex,
-    modelIdentifiers
+    modelIdentifiers,
+    supportSignals
   };
 }
 

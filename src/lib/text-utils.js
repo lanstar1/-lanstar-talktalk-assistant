@@ -28,6 +28,33 @@ const MODEL_STOPWORDS = new Set([
   "HDR10",
   "UHD60"
 ]);
+const SUPPORT_SIGNAL_KEYWORDS = {
+  display_no_signal: [
+    "화면이 안",
+    "화면 안",
+    "화면이 안나",
+    "안 나와",
+    "안 나와요",
+    "안 나오",
+    "안나와",
+    "안나오",
+    "안켜",
+    "검은화면",
+    "검은 화면",
+    "신호없",
+    "출력 안",
+    "출력이 안"
+  ],
+  recognition: ["인식", "감지", "미검출", "장치관리자", "장치 관리자", "검색이 안"],
+  driver: ["드라이버", "재설치", "프로그램 설치", "설치"],
+  connection: ["연결", "케이블", "포트", "usb", "hdmi", "displayport", "dp"],
+  rotation: ["세로", "피봇", "회전"],
+  resolution: ["해상도", "주사율", "800x600", "800×600", "hz"],
+  alt_mode: ["alt mode", "display alt mode", "dp alt", "alt모드"],
+  audio: ["소리", "오디오", "음성"],
+  power: ["전원", "켜지", "꺼지"],
+  compatibility: ["호환"]
+};
 
 export function normalizeText(value = "") {
   return String(value)
@@ -214,6 +241,17 @@ export function extractModelIdentifiers(...values) {
   }
 
   return [...identifiers];
+}
+
+export function extractSupportSignals(...values) {
+  const normalized = normalizeText(values.flat().join(" "));
+  if (!normalized) {
+    return [];
+  }
+
+  return Object.entries(SUPPORT_SIGNAL_KEYWORDS)
+    .filter(([, keywords]) => keywords.some((keyword) => normalized.includes(normalizeText(keyword))))
+    .map(([signal]) => signal);
 }
 
 export function extractPendingCustomerMessages(messages = []) {

@@ -96,12 +96,48 @@ test("주문내역 모델명과 동일한 상담이력을 우선 사용한다", 
     messages: [{ role: "customer", text: "모니터 연결했는데 화면이 안 나와요" }]
   });
 
-  assert.equal(suggestion.generationSource, "retrieval");
-  assert.match(suggestion.replyText, /LS-UH319-W 기준/);
+  assert.equal(suggestion.generationSource, "retrieval_contextual");
+  assert.match(suggestion.replyText, /LS-UH319-W/);
+  assert.match(suggestion.replyText, /드라이버/);
   assert.equal(
     suggestion.evidence[0].productName,
     "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터"
   );
+});
+
+test("같은 모델이라도 증상이 다르면 화면 출력 점검형 초안을 우선 만든다", () => {
+  const engine = new ReplyEngine({
+    examples: [
+      {
+        id: "history:pivot",
+        source: "상품Q&A",
+        productName: "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터",
+        customerText: "피봇 모니터 가능 한가요?",
+        answerText: "세로모드는 LS-UH319-W 화이트 제품만 가능합니다.",
+        orderSummary: ""
+      },
+      {
+        id: "history:display",
+        source: "상품Q&A",
+        productName: "랜스타 LS-UH319-W USB3.0 to HDMI 영상 컨버터",
+        customerText: "화면이 안 나오고 인식이 안 됩니다.",
+        answerText:
+          "드라이버 설치 여부와 다른 USB 포트 연결 여부를 확인 부탁드립니다.",
+        orderSummary: ""
+      }
+    ],
+    policies
+  });
+
+  const suggestion = engine.suggestReply({
+    productNames: ["LS-UH319-W"],
+    messages: [{ role: "customer", text: "제품 연결하고 모니터 연결했는데 안 나와요" }]
+  });
+
+  assert.equal(suggestion.generationSource, "retrieval_contextual");
+  assert.match(suggestion.replyText, /연결 상태/);
+  assert.match(suggestion.replyText, /드라이버/);
+  assert.doesNotMatch(suggestion.replyText, /세로모드/);
 });
 
 test("배송 문의는 주문 상태 정책을 우선 적용한다", () => {
