@@ -9,7 +9,7 @@ const state = {
   currentSuggestion: null,
   settings: null,
   activeAccount: null,
-  activeFocusTab: "thread",
+  activePage: "chat",
   pollTimer: null,
   reviewedDraftSignature: "",
   lastConversationListSignature: "",
@@ -20,6 +20,13 @@ const state = {
 const elements = {
   metrics: document.querySelector("#metrics"),
   llmStatusText: document.querySelector("#llmStatusText"),
+  pageEyebrow: document.querySelector("#pageEyebrow"),
+  pageTitle: document.querySelector("#pageTitle"),
+  pageDescription: document.querySelector("#pageDescription"),
+  navButtons: Array.from(document.querySelectorAll("[data-page]")),
+  pagePanels: Array.from(document.querySelectorAll("[data-page-panel]")),
+  sidebarChannel: document.querySelector("#sidebarChannel"),
+  sidebarStatus: document.querySelector("#sidebarStatus"),
   searchInput: document.querySelector("#searchInput"),
   accountSelect: document.querySelector("#accountSelect"),
   modeSelect: document.querySelector("#modeSelect"),
@@ -53,9 +60,25 @@ const elements = {
   confidenceText: document.querySelector("#confidenceText"),
   evidenceList: document.querySelector("#evidenceList"),
   copyButton: document.querySelector("#copyButton"),
-  conversationItemTemplate: document.querySelector("#conversationItemTemplate"),
-  focusTabButtons: Array.from(document.querySelectorAll("[data-focus-tab]")),
-  focusPanels: Array.from(document.querySelectorAll("[data-focus-panel]"))
+  conversationItemTemplate: document.querySelector("#conversationItemTemplate")
+};
+
+const PAGE_METADATA = {
+  chat: {
+    eyebrow: "Chat",
+    title: "채팅 워크벤치",
+    description: "대화 큐, 대화 보기, 초안 검토, 근거 데이터를 한 화면에서 처리합니다."
+  },
+  sync: {
+    eyebrow: "Sync",
+    title: "동기화 센터",
+    description: "실시간 워커 상태와 최근 동기화 현황을 확인하고 자동화를 제어합니다."
+  },
+  settings: {
+    eyebrow: "Settings",
+    title: "운영 설정",
+    description: "채널, 응답 모드, LLM 상태, 학습 현황을 관리합니다."
+  }
 };
 
 function formatStatusTimestamp(value) {
@@ -247,9 +270,13 @@ function renderDashboardSummary() {
       ? "운영자가 현재 초안을 확인했습니다"
       : state.currentSuggestion.llm?.used
         ? "LLM 보강 포함, 운영자 확인 필요"
-        : "초안 생성 완료, 검토 후 처리 필요"
+      : "초안 생성 완료, 검토 후 처리 필요"
     : "새 문의가 들어오면 자동 갱신됩니다";
 
+  elements.sidebarChannel.textContent = activeChannel;
+  elements.sidebarStatus.textContent = running
+    ? `실시간 동기화 중 / 최근 ${formatCompactTimestamp(syncValue)}`
+    : "자동화 워커 정지 상태";
   setHeroChipState(elements.heroChannel, activeChannel, Boolean(state.activeAccount));
   setHeroChipState(
     elements.heroMonitor,
@@ -282,13 +309,20 @@ function renderDashboardSummary() {
   elements.overviewDraftText.textContent = draftDetail;
 }
 
-function setActiveFocusTab(tabName) {
-  state.activeFocusTab = tabName;
-  for (const button of elements.focusTabButtons) {
-    button.classList.toggle("active", button.dataset.focusTab === tabName);
+function setActivePage(pageName) {
+  const page = PAGE_METADATA[pageName] ? pageName : "chat";
+  state.activePage = page;
+  const metadata = PAGE_METADATA[page];
+  elements.pageEyebrow.textContent = metadata.eyebrow;
+  elements.pageTitle.textContent = metadata.title;
+  elements.pageDescription.textContent = metadata.description;
+
+  for (const button of elements.navButtons) {
+    button.classList.toggle("active", button.dataset.page === page);
   }
-  for (const panel of elements.focusPanels) {
-    panel.classList.toggle("active", panel.dataset.focusPanel === tabName);
+
+  for (const panel of elements.pagePanels) {
+    panel.classList.toggle("active", panel.dataset.pagePanel === page);
   }
 }
 
@@ -304,7 +338,6 @@ function clearConversationSource() {
   state.reviewedDraftSignature = "";
   state.lastConversationListSignature = "";
   setConversationSource([]);
-  setActiveFocusTab("thread");
   elements.customerName.textContent = "실시간 대화를 기다리는 중";
   elements.orderSummary.textContent = "자동화 시작 후 현재 톡톡 대화가 표시됩니다";
   elements.productTags.innerHTML = "";
@@ -577,7 +610,6 @@ async function selectLiveConversation(conversationId) {
     method: "POST",
     body: JSON.stringify({ conversationId })
   });
-  setActiveFocusTab("thread");
   hydrateLiveConversation(payload.live);
   updateSendButtonState();
 }
@@ -613,7 +645,6 @@ async function generateSuggestion() {
     method: "POST",
     body: JSON.stringify(buildCurrentConversationRequestBody())
   });
-  setActiveFocusTab("draft");
   renderSuggestion(payload.suggestion);
 }
 
@@ -767,6 +798,7 @@ async function bootstrap() {
   updateSendButtonState();
   updateReviewButtonState();
   renderDashboardSummary();
+  setActivePage(state.activePage);
   startPolling();
 
   await refreshAutomationStatus();
@@ -792,9 +824,9 @@ elements.startAutomationButton.addEventListener("click", startAutomation);
 elements.stopAutomationButton.addEventListener("click", stopAutomation);
 elements.copyButton.addEventListener("click", copyDraft);
 elements.draftReply.addEventListener("input", updateReviewButtonState);
-for (const button of elements.focusTabButtons) {
+for (const button of elements.navButtons) {
   button.addEventListener("click", () => {
-    setActiveFocusTab(button.dataset.focusTab);
+    setActivePage(button.dataset.page);
   });
 }
 
