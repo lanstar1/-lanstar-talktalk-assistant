@@ -1,13 +1,18 @@
+const POLL_INTERVAL_MS = 4000;
+
 const state = {
+  historicalConversations: [],
   conversations: [],
   filteredConversations: [],
+  liveOverview: null,
   currentConversationId: null,
   currentConversation: null,
   manualConversation: null,
   previousConversationId: null,
   currentSuggestion: null,
   settings: null,
-  activeAccount: null
+  activeAccount: null,
+  pollTimer: null
 };
 
 const elements = {
@@ -48,6 +53,18 @@ const elements = {
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function isMonitorOnly() {
+  return state.settings?.monitorOnly !== false;
+}
+
+function hasLiveMonitor() {
+  return Boolean(state.liveOverview?.running);
+}
+
+function getCurrentSearchQuery() {
+  return elements.searchInput.value.trim();
 }
 
 function createManualPurchaseHistory() {
@@ -125,6 +142,8 @@ function syncManualConversationFromForm() {
   }
 
   state.manualConversation = buildManualConversation();
+  state.currentConversation = state.manualConversation;
+  state.currentConversationId = state.manualConversation.id;
   renderThread(state.manualConversation);
   updateSendButtonState();
   return true;
@@ -216,6 +235,15 @@ function renderLlmStatus(llmStatus, suggestion = null) {
   elements.llmStatusText.textContent = `${base} / 이번 초안은 규칙+검색만 사용`;
 }
 
+function setConversationSource(conversations) {
+  state.conversations = conversations;
+  applyFilter(getCurrentSearchQuery());
+}
+
+function restoreHistoricalSource() {
+  setConversationSource(state.historicalConversations);
+}
+
 function renderConversationList(conversations) {
   elements.conversationCount.textContent = `${conversations.length}건`;
   elements.conversationList.innerHTML = "";
@@ -226,17 +254,29 @@ function renderConversationList(conversations) {
     button.dataset.id = conversation.id;
     button.classList.toggle("active", state.currentConversationId === conversation.id);
     button.querySelector(".conversation-name").textContent = conversation.customerName;
-    button.querySelector(".conversation-date").textContent =
-      conversation.latestOrderDate || "주문일 미확인";
+    button.querySelector(".conversation-date").textContent = conversation.isLive
+      ? [
+          conversation.timeLabel || "방금 전",
+          conversation.unreadCount > 0 ? `안읽음 ${conversation.unreadCount}` : ""
+        ]
+          .filter(Boolean)
+          .join(" / ")
+      : conversation.latestOrderDate || "주문일 미확인";
     button.querySelector(".conversation-products").textContent =
-      conversation.productNames.join(" / ") || "상품명 없음";
-    button.querySelector(".conversation-preview").textContent = conversation.preview;
+      conversation.productNames?.join(" / ") ||
+      (conversation.isLive ? "실시간 대화" : "상품명 없음");
+    button.querySelector(".conversation-preview").textContent =
+      conversation.preview || "최근 메시지 없음";
 
-    if (conversation.awaitingReply) {
+    if (conversation.awaitingReply || conversation.unreadCount > 0) {
       button.classList.add("awaiting");
     }
 
-    button.addEventListener("click", () => selectConversation(conversation.id));
+    button.addEventListener("click", () => {
+      selectConversation(conversation.id).catch((error) => {
+        elements.automationStatus.textContent = error.message;
+      });
+    });
     elements.conversationList.appendChild(fragment);
   }
 }
@@ -247,16 +287,16 @@ function renderThread(conversation) {
   elements.productTags.innerHTML = "";
   elements.thread.innerHTML = "";
 
-  for (const productName of conversation.productNames) {
+  for (const productName of conversation.productNames ?? []) {
     const tag = document.createElement("span");
     tag.className = "tag";
     tag.textContent = productName;
     elements.productTags.appendChild(tag);
   }
 
-  for (const message of conversation.messages) {
+  for (const message of conversation.messages ?? []) {
     const bubble = document.createElement("article");
-    bubble.className = `bubble ${message.role}`;
+    bubble.className = `bubble ${message.role === "customer" ? "customer" : "seller"}`;
     bubble.innerHTML = `
       <span class="bubble-role">${message.role === "customer" ? "고객" : "판매자"}</span>
       <p>${message.text}</p>
@@ -276,21 +316,32 @@ function resetSuggestionView() {
 }
 
 function updateSendButtonState() {
-  const disabled = false;
-  elements.sendButton.disabled = disabled;
-  elements.sendButton.title = state.manualConversation
-    ? "테스트 문의에서는 실제 톡톡 전송 대신 화면에 판매자 답변으로 반영됩니다."
-    : "";
-  elements.sendButton.textContent = state.manualConversation
-    ? "테스트 반영"
-    : "검토 후 전송";
+  const monitorOnly = isMonitorOnly();
+
+  if (state.manualConversation) {
+    elements.sendButton.disabled = false;
+    elements.sendButton.title =
+      "테스트 문의에서는 실제 톡톡 전송 대신 화면에 판매자 답변으로 반영됩니다.";
+    elements.sendButton.textContent = "테스트 반영";
+    return;
+  }
+
+  if (monitorOnly) {
+    elements.sendButton.disabled = true;
+    elements.sendButton.title = "테스트 목적이라 고객 전송이 비활성화되어 있습니다.";
+    elements.sendButton.textContent = "전송 차단";
+    return;
+  }
+
+  elements.sendButton.disabled = false;
+  elements.sendButton.title = "";
+  elements.sendButton.textContent = "검토 후 전송";
 }
 
 function renderFlags(flags = []) {
   elements.flagList.innerHTML = "";
   if (!flags.length) {
-    elements.flagList.innerHTML =
-      '<span class="flag success">민감 키워드 없음</span>';
+    elements.flagList.innerHTML = '<span class="flag success">민감 키워드 없음</span>';
     return;
   }
 
@@ -337,18 +388,63 @@ function renderSuggestion(suggestion) {
       ? "LLM 보강"
       : suggestion.generationSource === "retrieval_contextual"
         ? "문맥 기반 초안"
-      : suggestion.generationSource === "policy"
-        ? "정책 응답"
-        : suggestion.generationSource === "retrieval"
-          ? "기존 이력 재사용"
-          : "기본 응답";
+        : suggestion.generationSource === "policy"
+          ? "정책 응답"
+          : suggestion.generationSource === "retrieval"
+            ? "기존 이력 재사용"
+            : "기본 응답";
   elements.confidenceText.textContent = `신뢰도 ${Math.round(
     suggestion.confidence * 100
   )}% / ${sourceLabel} / ${suggestion.canAutoSend ? "자동 발송 가능" : "검토 필요"}`;
   renderLlmStatus(state.settings?.llmStatus ?? suggestion.llm, suggestion);
 }
 
-async function selectConversation(conversationId) {
+function applyFilter(query) {
+  const lowered = query.trim().toLowerCase();
+  if (!lowered) {
+    state.filteredConversations = [...state.conversations];
+  } else {
+    state.filteredConversations = state.conversations.filter((conversation) => {
+      const haystack = [
+        conversation.customerName,
+        conversation.preview,
+        conversation.orderSummary,
+        (conversation.productNames ?? []).join(" ")
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(lowered);
+    });
+  }
+  renderConversationList(state.filteredConversations);
+}
+
+function hydrateLiveConversation(live) {
+  state.liveOverview = live;
+  if (!live?.running) {
+    return;
+  }
+
+  setConversationSource(live.conversations ?? []);
+
+  if (state.manualConversation) {
+    return;
+  }
+
+  if (live.selectedConversation) {
+    state.currentConversationId = live.selectedConversation.id;
+    state.currentConversation = live.selectedConversation;
+    renderThread(live.selectedConversation);
+  }
+
+  if (live.suggestion) {
+    renderSuggestion(live.suggestion);
+  } else if (live.selectedConversation) {
+    resetSuggestionView();
+  }
+}
+
+async function selectHistoricalConversation(conversationId) {
   state.manualConversation = null;
   state.previousConversationId = conversationId;
   state.currentConversationId = conversationId;
@@ -363,6 +459,38 @@ async function selectConversation(conversationId) {
     "질문을 입력한 뒤 테스트 초안 생성을 누르세요.";
 }
 
+async function selectLiveConversation(conversationId) {
+  state.manualConversation = null;
+  const payload = await request("/api/live/select", {
+    method: "POST",
+    body: JSON.stringify({ conversationId })
+  });
+  hydrateLiveConversation(payload.live);
+  updateSendButtonState();
+}
+
+async function selectConversation(conversationId) {
+  if (conversationId.startsWith("live:") && hasLiveMonitor()) {
+    await selectLiveConversation(conversationId);
+    return;
+  }
+
+  await selectHistoricalConversation(conversationId);
+}
+
+function buildCurrentConversationRequestBody() {
+  if (!state.currentConversation) {
+    return null;
+  }
+
+  return {
+    customerName: state.currentConversation.customerName,
+    purchaseHistory: state.currentConversation.purchaseHistory ?? [],
+    messages: state.currentConversation.messages ?? [],
+    productNames: state.currentConversation.productNames ?? []
+  };
+}
+
 async function generateSuggestion() {
   let requestBody = null;
   if (state.manualConversation) {
@@ -370,12 +498,9 @@ async function generateSuggestion() {
       return;
     }
 
-    requestBody = {
-      customerName: state.manualConversation.customerName,
-      purchaseHistory: state.manualConversation.purchaseHistory,
-      messages: state.manualConversation.messages,
-      productNames: state.manualConversation.productNames
-    };
+    requestBody = buildCurrentConversationRequestBody();
+  } else if (state.currentConversation?.isLive) {
+    requestBody = buildCurrentConversationRequestBody();
   } else if (state.currentConversationId) {
     requestBody = { conversationId: state.currentConversationId };
   }
@@ -391,26 +516,6 @@ async function generateSuggestion() {
   renderSuggestion(payload.suggestion);
 }
 
-function applyFilter(query) {
-  const lowered = query.trim().toLowerCase();
-  if (!lowered) {
-    state.filteredConversations = [...state.conversations];
-  } else {
-    state.filteredConversations = state.conversations.filter((conversation) => {
-      const haystack = [
-        conversation.customerName,
-        conversation.preview,
-        conversation.orderSummary,
-        conversation.productNames.join(" ")
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(lowered);
-    });
-  }
-  renderConversationList(state.filteredConversations);
-}
-
 async function saveMode() {
   const payload = await request("/api/settings", {
     method: "POST",
@@ -418,6 +523,8 @@ async function saveMode() {
   });
   state.settings = { ...payload.settings, llmStatus: payload.llmStatus };
   elements.modeSelect.value = payload.settings.mode;
+  elements.modeSelect.disabled = isMonitorOnly();
+  updateSendButtonState();
   renderLlmStatus(state.settings.llmStatus ?? state.currentSuggestion?.llm);
 }
 
@@ -427,24 +534,49 @@ async function saveActiveAccount() {
     body: JSON.stringify({ activeAccountId: elements.accountSelect.value })
   });
   state.settings = { ...payload.settings, llmStatus: payload.llmStatus };
+  state.liveOverview = null;
   renderAccountSelect(payload.settings);
+  elements.modeSelect.disabled = isMonitorOnly();
+  updateSendButtonState();
   await refreshAutomationStatus();
+  if (!hasLiveMonitor() && !state.manualConversation) {
+    restoreHistoricalSource();
+  }
+}
+
+async function refreshLiveOverview() {
+  if (!hasLiveMonitor()) {
+    return;
+  }
+
+  const payload = await request("/api/live/overview");
+  hydrateLiveConversation(payload.live);
 }
 
 async function refreshAutomationStatus() {
   const payload = await request("/api/automation/status");
   const { automation } = payload;
   const accountLabel = state.activeAccount ? `선택 채널 ${state.activeAccount.name}` : "채널 미선택";
+  const monitorLabel = isMonitorOnly() ? " / 테스트 모니터링 / 고객 전송 차단" : "";
 
   if (automation.running) {
-    elements.automationStatus.textContent = `${accountLabel} / 브라우저 실행 중 / 최근 초안 ${
-      automation.lastDraft?.at ?? "없음"
-    }${automation.lastDraft?.llmUsed ? " / LLM 보강 사용" : ""}`;
+    elements.automationStatus.textContent = `${accountLabel}${monitorLabel} / 브라우저 실행 중 / 최근 동기화 ${
+      automation.live?.updatedAt ?? automation.lastDraft?.at ?? "대기 중"
+    }`;
+    state.liveOverview = automation.live ?? state.liveOverview;
   } else if (automation.lastError) {
-    elements.automationStatus.textContent = `${accountLabel} / 중지됨 / ${automation.lastError}`;
+    elements.automationStatus.textContent = `${accountLabel}${monitorLabel} / 중지됨 / ${automation.lastError}`;
+    state.liveOverview = null;
   } else {
-    elements.automationStatus.textContent = `${accountLabel} / 자동화 워커 정지 상태`;
+    elements.automationStatus.textContent = `${accountLabel}${monitorLabel} / 자동화 워커 정지 상태`;
+    state.liveOverview = null;
   }
+
+  if (!automation.running && !state.manualConversation) {
+    restoreHistoricalSource();
+  }
+
+  return automation;
 }
 
 async function startAutomation() {
@@ -454,12 +586,28 @@ async function startAutomation() {
     elements.automationStatus.textContent = error.message;
     return;
   }
+
   await refreshAutomationStatus();
+  await refreshLiveOverview();
+  updateSendButtonState();
 }
 
 async function stopAutomation() {
   await request("/api/automation/stop", { method: "POST" });
   await refreshAutomationStatus();
+  updateSendButtonState();
+
+  if (!state.manualConversation) {
+    const firstAwaiting =
+      state.historicalConversations.find((conversation) => conversation.awaitingReply) ??
+      state.historicalConversations[0];
+    if (firstAwaiting) {
+      await selectHistoricalConversation(firstAwaiting.id);
+      await generateSuggestion();
+    } else {
+      resetSuggestionView();
+    }
+  }
 }
 
 async function sendDraft() {
@@ -474,28 +622,15 @@ async function sendDraft() {
       role: "seller",
       text: replyText
     });
+    state.currentConversation = state.manualConversation;
     renderThread(state.manualConversation);
     elements.automationStatus.textContent =
       "테스트 문의에 판매자 답변으로 반영했습니다. 실제 톡톡에는 전송되지 않았습니다.";
     return;
   }
 
-  const replyText = elements.draftReply.value.trim();
-  if (!replyText) {
-    elements.automationStatus.textContent = "전송할 답변이 없습니다.";
-    return;
-  }
-
-  try {
-    const payload = await request("/api/automation/manual-send", {
-      method: "POST",
-      body: JSON.stringify({ replyText })
-    });
-    elements.automationStatus.textContent = `${state.activeAccount?.name ?? "선택 채널"} 채널 대화창으로 답변을 전송했습니다.`;
-    return payload;
-  } catch (error) {
-    elements.automationStatus.textContent = error.message;
-  }
+  elements.automationStatus.textContent =
+    "테스트 모드에서는 고객에게 실제 답변을 전송할 수 없습니다.";
 }
 
 async function applyManualTest() {
@@ -513,6 +648,7 @@ async function applyManualTest() {
   state.currentConversationId = null;
   state.currentConversation = null;
   state.manualConversation = buildManualConversation();
+  state.currentConversation = state.manualConversation;
   renderConversationList(state.filteredConversations);
   renderThread(state.manualConversation);
   resetSuggestionView();
@@ -542,8 +678,13 @@ async function resetManualTest() {
     "질문을 입력한 뒤 테스트 초안 생성을 누르세요.";
   updateSendButtonState();
 
+  if (hasLiveMonitor()) {
+    await refreshLiveOverview();
+    return;
+  }
+
   if (state.previousConversationId) {
-    await selectConversation(state.previousConversationId);
+    await selectHistoricalConversation(state.previousConversationId);
     await generateSuggestion();
     return;
   }
@@ -553,7 +694,7 @@ async function resetManualTest() {
   elements.orderSummary.textContent = "주문 정보 없음";
   elements.productTags.innerHTML = "";
   elements.thread.innerHTML = "";
-  renderConversationList(state.filteredConversations);
+  restoreHistoricalSource();
 }
 
 async function copyDraft() {
@@ -567,26 +708,58 @@ async function copyDraft() {
   }, 1200);
 }
 
+async function pollLiveMonitor() {
+  try {
+    const automation = await refreshAutomationStatus();
+    if (automation?.running) {
+      await refreshLiveOverview();
+    }
+  } catch (error) {
+    elements.automationStatus.textContent = error.message;
+  }
+}
+
+function startPolling() {
+  if (state.pollTimer) {
+    window.clearInterval(state.pollTimer);
+  }
+
+  state.pollTimer = window.setInterval(() => {
+    pollLiveMonitor().catch((error) => {
+      elements.automationStatus.textContent = error.message;
+    });
+  }, POLL_INTERVAL_MS);
+}
+
 async function bootstrap() {
   const payload = await request("/api/bootstrap");
-  state.conversations = payload.conversations;
-  state.filteredConversations = [...payload.conversations];
+  state.historicalConversations = payload.conversations;
+  state.settings = { ...payload.settings, llmStatus: payload.llmStatus };
+  state.liveOverview = payload.live;
 
   renderMetrics(payload.stats);
-  state.settings = { ...payload.settings, llmStatus: payload.llmStatus };
   renderAccountSelect(payload.settings);
-  renderConversationList(state.filteredConversations);
   elements.modeSelect.value = payload.settings.mode;
+  elements.modeSelect.disabled = isMonitorOnly();
   renderLlmStatus(payload.llmStatus);
   elements.manualOrderDate.value = todayString();
   updateSendButtonState();
+  startPolling();
+
   await refreshAutomationStatus();
 
+  if (payload.live?.running) {
+    hydrateLiveConversation(payload.live);
+    updateSendButtonState();
+    return;
+  }
+
+  restoreHistoricalSource();
   const firstAwaiting =
     payload.conversations.find((conversation) => conversation.awaitingReply) ??
     payload.conversations[0];
   if (firstAwaiting) {
-    await selectConversation(firstAwaiting.id);
+    await selectHistoricalConversation(firstAwaiting.id);
     await generateSuggestion();
   }
 }

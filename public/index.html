@@ -104,7 +104,7 @@
           <div class="panel-row">
             <div>
               <p class="label">응답 모드</p>
-              <p class="subtle small">현재 기본값은 검토 후 전송입니다.</p>
+              <p class="subtle small">현재는 실시간 모니터링 테스트 중이라 고객 전송이 차단됩니다.</p>
             </div>
             <select id="modeSelect" class="select-input">
               <option value="review">검토 후 전송</option>
@@ -159,8 +159,8 @@
                 </div>
                 <span id="confidenceText" class="confidence-text">신뢰도 -</span>
               </div>
-              <p class="subtle small">
-                검토 후 전송은 현재 선택된 채널의 톡톡 브라우저에서 열려 있는 대화창으로 전송됩니다.
+              <p id="draftHint" class="subtle small">
+                실시간 모니터링 테스트 중에는 고객 전송이 비활성화되며, 새 문의에 대한 초안만 자동 갱신됩니다.
               </p>
               <textarea id="draftReply" class="draft-textarea" placeholder="추천 답변이 여기에 표시됩니다."></textarea>
               <div id="flagList" class="flag-list"></div>

@@ -35,6 +35,7 @@ function createDefaultAccount(id, name, userDataDir, metadata = {}) {
 
 const DEFAULT_SETTINGS = {
   mode: "review",
+  monitorOnly: true,
   autoSendThreshold: 0.8,
   llm: DEFAULT_LLM,
   activeAccountId: "account-1",
@@ -120,6 +121,7 @@ function mergeAccounts(baseAccounts = [], updateAccounts = []) {
 function mergeSettings(source, updates) {
   return {
     mode: updates.mode ?? source.mode,
+    monitorOnly: updates.monitorOnly ?? source.monitorOnly ?? true,
     autoSendThreshold: updates.autoSendThreshold ?? source.autoSendThreshold,
     llm: {
       ...DEFAULT_LLM,

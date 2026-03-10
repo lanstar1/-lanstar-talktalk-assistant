@@ -17,6 +17,24 @@
     "input": "textarea, [contenteditable='true']",
     "sendButton": "role=button[name=\"전송\"]"
   },
+  "live": {
+    "dismissPopupButtons": [
+      "button.btn_close_chrome"
+    ],
+    "conversationRows": "li.item_chat_result",
+    "conversationRowLink": "a.inner",
+    "conversationName": ".text_name",
+    "conversationTime": ".chat_info_time",
+    "conversationPreview": ".text_message",
+    "conversationUnreadBadge": ".badge_alarm",
+    "customerName": ".chat_name .profile_name",
+    "messageRows": "li.balloon_item._message",
+    "messageCopyText": "p._copy_area",
+    "messageCompositeText": ".component_group .composite_text",
+    "messageText": ".balloon_chat.message_balloon",
+    "input": "#partner_chat_write",
+    "sendButton": "button.chat_write_btn"
+  },
   "partnerSelectors": {
     "home": {
       "myAccountsButton": "a[href='/web/accounts/list'][class*='Gnb-module__control']",

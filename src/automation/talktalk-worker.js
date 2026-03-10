@@ -2,6 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getActiveAccount } from "../lib/settings.js";
+import {
+  buildLiveChatDetailUrl,
+  buildLiveChatListUrl,
+  buildMessageSignature,
+  buildPendingCustomerText,
+  createLiveConversationId,
+  deriveProductNamesFromMessages,
+  extractUserIdFromChatHref,
+  extractUserIdFromChatUrl,
+  getPartnerCodeFromPublicChatUrl,
+  parseLiveConversationId,
+  stripSellerPrefix,
+  summarizeLiveOrder
+} from "../lib/talktalk-live.js";
 
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes(String(value ?? "").toLowerCase());
@@ -21,6 +35,10 @@ function normalizeSnippet(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function lastOf(values = []) {
+  return values[values.length - 1] ?? null;
+}
+
 export class TalkTalkWorker {
   constructor({ rootDir, engine, getSettings }) {
     this.rootDir = rootDir;
@@ -36,9 +54,25 @@ export class TalkTalkWorker {
     this.tickCount = 0;
     this.currentAccountId = null;
     this.currentAccountName = null;
+    this.selectedConversationUserId = null;
+    this.manualSelection = false;
+    this.lastSuggestionSignature = null;
+    this.liveState = this.createEmptyLiveState();
+  }
+
+  createEmptyLiveState() {
+    return {
+      updatedAt: null,
+      partnerCode: null,
+      conversations: [],
+      selectedConversationId: null,
+      selectedConversation: null,
+      lastSuggestion: null
+    };
   }
 
   getStatus() {
+    const live = this.getLiveOverview();
     return {
       running: Boolean(this.timer),
       accountId: this.currentAccountId,
@@ -46,12 +80,34 @@ export class TalkTalkWorker {
       startedAt: this.startedAt,
       tickCount: this.tickCount,
       lastError: this.lastError,
-      lastDraft: this.lastDraft
+      lastDraft: this.lastDraft,
+      monitorOnly: this.isMonitorOnly(),
+      live
+    };
+  }
+
+  getLiveOverview() {
+    return {
+      running: Boolean(this.timer),
+      accountId: this.currentAccountId,
+      accountName: this.currentAccountName,
+      monitorOnly: this.isMonitorOnly(),
+      updatedAt: this.liveState.updatedAt,
+      partnerCode: this.liveState.partnerCode,
+      conversations: this.liveState.conversations,
+      selectedConversationId: this.liveState.selectedConversationId,
+      selectedConversation: this.liveState.selectedConversation,
+      suggestion: this.liveState.lastSuggestion,
+      lastError: this.lastError
     };
   }
 
   getCurrentAccount() {
     return getActiveAccount(this.getSettings());
+  }
+
+  isMonitorOnly() {
+    return this.getSettings().monitorOnly !== false;
   }
 
   async loadSelectorConfig(account = this.getCurrentAccount()) {
@@ -66,11 +122,37 @@ export class TalkTalkWorker {
   async ensurePlaywright() {
     try {
       return await import("playwright");
-    } catch (error) {
+    } catch {
       throw new Error(
         "playwright 패키지가 설치되지 않았습니다. npm install playwright 후 다시 시도해 주세요."
       );
     }
+  }
+
+  getPartnerCode(account = this.getCurrentAccount()) {
+    return getPartnerCodeFromPublicChatUrl(account.talktalk.publicChatUrl);
+  }
+
+  resolveLiveListUrl(account = this.getCurrentAccount()) {
+    const partnerCode = this.getPartnerCode(account);
+    const liveUrl = buildLiveChatListUrl(partnerCode);
+
+    if (!liveUrl) {
+      throw new Error("활성 채널의 공개 채팅 URL에서 톡톡 채널 코드를 찾지 못했습니다.");
+    }
+
+    return liveUrl;
+  }
+
+  resolveLiveDetailUrl(userId, account = this.getCurrentAccount()) {
+    const partnerCode = this.getPartnerCode(account);
+    const detailUrl = buildLiveChatDetailUrl(partnerCode, userId);
+
+    if (!detailUrl) {
+      throw new Error("선택한 실시간 대화 URL을 만들지 못했습니다.");
+    }
+
+    return detailUrl;
   }
 
   async start() {
@@ -123,22 +205,29 @@ export class TalkTalkWorker {
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
     }
 
-    await this.page.goto(account.talktalk.url, { waitUntil: "domcontentloaded" });
+    await this.page.goto(this.resolveLiveListUrl(account), {
+      waitUntil: "domcontentloaded"
+    });
+    await this.page.waitForLoadState("networkidle").catch(() => {});
 
     this.currentAccountId = account.id;
     this.currentAccountName = account.name;
     this.startedAt = new Date().toISOString();
     this.lastError = null;
     this.tickCount = 0;
+    this.selectedConversationUserId = null;
+    this.manualSelection = false;
+    this.lastSuggestionSignature = null;
+    this.liveState = this.createEmptyLiveState();
 
-    const pollInterval = Math.max(5000, account.talktalk.pollIntervalMs ?? 12000);
+    const pollInterval = Math.max(4000, account.talktalk.pollIntervalMs ?? 12000);
     this.timer = setInterval(() => {
       this.tick().catch((error) => {
         this.lastError = error.message;
       });
     }, pollInterval);
 
-    await this.tick();
+    await this.tick({ forceSuggestion: true });
     return this.getStatus();
   }
 
@@ -161,10 +250,14 @@ export class TalkTalkWorker {
     this.page = null;
     this.currentAccountId = null;
     this.currentAccountName = null;
+    this.selectedConversationUserId = null;
+    this.manualSelection = false;
+    this.lastSuggestionSignature = null;
+    this.liveState = this.createEmptyLiveState();
     return this.getStatus();
   }
 
-  async tick() {
+  async tick(options = {}) {
     this.tickCount += 1;
     if (!this.page) {
       return null;
@@ -178,166 +271,316 @@ export class TalkTalkWorker {
     }
 
     const config = await this.loadSelectorConfig(account);
-    const snapshot = await this.extractCurrentConversation(config.selectors);
+    const liveConfig = config.live ?? {};
+    await this.dismissMonitorPopups(liveConfig);
 
-    if (!snapshot?.messages?.length || !snapshot.pendingCustomerText) {
-      return null;
+    let conversations = await this.extractConversationList(liveConfig, account);
+    if (!conversations.length) {
+      this.liveState = {
+        ...this.createEmptyLiveState(),
+        updatedAt: new Date().toISOString(),
+        partnerCode: this.getPartnerCode(account)
+      };
+      return this.getLiveOverview();
     }
 
-    const suggestion = await this.engine.suggestReplyEnhanced(snapshot);
-    this.lastDraft = {
-      at: new Date().toISOString(),
-      customerName: snapshot.customerName,
-      replyText: suggestion.replyText,
-      confidence: suggestion.confidence,
-      canAutoSend: suggestion.canAutoSend,
-      policyRule: suggestion.policyRule,
-      generationSource: suggestion.generationSource,
-      llmUsed: suggestion.llm?.used ?? false
+    const desiredConversation = this.pickConversationToOpen(conversations);
+    const currentUserId = extractUserIdFromChatUrl(this.page.url());
+
+    if (desiredConversation?.userId && desiredConversation.userId !== currentUserId) {
+      await this.page.goto(this.resolveLiveDetailUrl(desiredConversation.userId, account), {
+        waitUntil: "domcontentloaded"
+      });
+      await this.page.waitForLoadState("networkidle").catch(() => {});
+      await this.dismissMonitorPopups(liveConfig);
+      conversations = await this.extractConversationList(liveConfig, account);
+    }
+
+    const selectedConversation = await this.extractSelectedConversation(
+      liveConfig,
+      account,
+      conversations
+    );
+    let suggestion = this.liveState.lastSuggestion;
+
+    if (selectedConversation?.pendingCustomerText) {
+      const suggestionSignature = `${selectedConversation.id}:${buildMessageSignature(
+        selectedConversation.messages
+      )}`;
+
+      if (options.forceSuggestion || suggestionSignature !== this.lastSuggestionSignature) {
+        suggestion = await this.engine.suggestReplyEnhanced(selectedConversation);
+        this.lastSuggestionSignature = suggestionSignature;
+        this.lastDraft = {
+          at: new Date().toISOString(),
+          customerName: selectedConversation.customerName,
+          replyText: suggestion.replyText,
+          confidence: suggestion.confidence,
+          canAutoSend: false,
+          policyRule: suggestion.policyRule,
+          generationSource: suggestion.generationSource,
+          llmUsed: suggestion.llm?.used ?? false
+        };
+      }
+    } else {
+      suggestion = null;
+      this.lastSuggestionSignature = null;
+    }
+
+    this.liveState = {
+      updatedAt: new Date().toISOString(),
+      partnerCode: this.getPartnerCode(account),
+      conversations,
+      selectedConversationId: selectedConversation?.id ?? null,
+      selectedConversation,
+      lastSuggestion: suggestion
     };
 
-    const settings = this.getSettings();
-    if (settings.mode === "auto" && suggestion.canAutoSend) {
-      await this.sendDraft(config.selectors, suggestion.replyText);
-    }
-
-    return suggestion;
+    return this.getLiveOverview();
   }
 
-  async sendManualDraft(replyText) {
+  async sendManualDraft() {
+    throw new Error("테스트 모드에서는 고객에게 실제 답변을 전송할 수 없습니다.");
+  }
+
+  async selectLiveConversation(conversationId) {
     if (!this.page) {
       throw new Error("자동화 워커가 실행 중이 아닙니다. 먼저 자동화를 시작해 주세요.");
     }
 
     const account = this.getCurrentAccount();
-    if (this.currentAccountId && account.id !== this.currentAccountId) {
-      throw new Error("선택된 채널이 현재 실행 중인 톡톡 브라우저 채널과 다릅니다.");
+    const parsed = parseLiveConversationId(conversationId);
+    const userId = parsed?.userId;
+    if (!userId) {
+      throw new Error("선택할 실시간 대화 ID가 올바르지 않습니다.");
     }
 
-    const config = await this.loadSelectorConfig(account);
-    await this.sendDraft(config.selectors, replyText);
-
-    this.lastDraft = {
-      at: new Date().toISOString(),
-      customerName: this.lastDraft?.customerName ?? "수동 전송",
-      replyText,
-      confidence: this.lastDraft?.confidence ?? null,
-      canAutoSend: false,
-      policyRule: this.lastDraft?.policyRule ?? "manual_review"
-    };
-
-    return this.getStatus();
+    this.selectedConversationUserId = userId;
+    this.manualSelection = true;
+    await this.page.goto(this.resolveLiveDetailUrl(userId, account), {
+      waitUntil: "domcontentloaded"
+    });
+    await this.page.waitForLoadState("networkidle").catch(() => {});
+    await this.tick({ forceSuggestion: true });
+    return this.getLiveOverview();
   }
 
-  async extractCurrentConversation(selectors) {
-    if (!this.page) {
+  pickConversationToOpen(conversations) {
+    if (!conversations.length) {
       return null;
     }
 
-    const rows = this.page.locator(selectors.messageRows);
-    const rowCount = await rows.count();
-
-    if (!rowCount) {
-      throw new Error(
-        "messageRows 셀렉터가 현재 페이지에서 메시지를 찾지 못했습니다. config/talktalk.selectors.sample.json을 실제 DOM에 맞게 조정해 주세요."
+    if (this.selectedConversationUserId) {
+      const preserved = conversations.find(
+        (conversation) => conversation.userId === this.selectedConversationUserId
       );
+      if (preserved) {
+        return preserved;
+      }
     }
 
-    const customerName = (
-      await this.page.locator(selectors.customerName).first().textContent()
-    )?.trim();
+    const currentUserId = extractUserIdFromChatUrl(this.page?.url());
+    if (currentUserId && !this.manualSelection) {
+      const current = conversations.find(
+        (conversation) => conversation.userId === currentUserId
+      );
+      if (current) {
+        return current;
+      }
+    }
 
-    const messages = [];
+    const unread = conversations.find((conversation) => conversation.unreadCount > 0);
+    if (unread) {
+      this.selectedConversationUserId = unread.userId;
+      this.manualSelection = false;
+      return unread;
+    }
+
+    this.selectedConversationUserId = conversations[0].userId;
+    this.manualSelection = false;
+    return conversations[0];
+  }
+
+  async dismissMonitorPopups(liveConfig) {
+    if (!this.page) {
+      return;
+    }
+
+    const closeSelectors = liveConfig.dismissPopupButtons ?? [];
+    for (const selector of closeSelectors) {
+      const buttons = this.page.locator(selector);
+      const count = await buttons.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        await buttons.nth(index).click({ timeout: 500 }).catch(() => {});
+      }
+    }
+  }
+
+  async extractConversationList(liveConfig, account) {
+    const rows = this.page.locator(liveConfig.conversationRows);
+    const rowCount = await rows.count();
+    const sellerName = normalizeSnippet(account.talktalk.sourceName || account.name);
+    const partnerCode = this.getPartnerCode(account);
+    const conversations = [];
+
     for (let index = 0; index < rowCount; index += 1) {
       const row = rows.nth(index);
-      const text = (await row.locator(selectors.messageText).first().textContent())?.trim();
-      if (!text) {
+      const href = await this.readOptionalAttribute(
+        row,
+        liveConfig.conversationRowLink,
+        "href"
+      );
+      const userId = extractUserIdFromChatHref(href);
+      if (!userId) {
         continue;
       }
 
-      const isCustomer =
-        (await row.locator(selectors.incomingRow).count()) > 0 &&
-        (await row.locator(selectors.outgoingRow).count()) === 0;
-      const role = isCustomer ? "customer" : "seller";
-      messages.push({ role, text });
+      const preview = stripSellerPrefix(
+        await this.readOptionalText(row, liveConfig.conversationPreview),
+        sellerName
+      );
+      const unreadText = await this.readOptionalText(row, liveConfig.conversationUnreadBadge);
+      const unreadCount = Number.parseInt(unreadText || "0", 10) || 0;
+      const itemClass = (await row.getAttribute("class")) ?? "";
+
+      conversations.push({
+        id: createLiveConversationId(partnerCode, userId),
+        userId,
+        isLive: true,
+        customerName: await this.readOptionalText(row, liveConfig.conversationName),
+        preview,
+        unreadCount,
+        timeLabel: await this.readOptionalText(row, liveConfig.conversationTime),
+        href: buildLiveChatDetailUrl(partnerCode, userId),
+        awaitingReply: unreadCount > 0,
+        orderSummary: "실시간 상담",
+        latestOrderDate: "",
+        productNames: [],
+        selected: /\bon\b/.test(itemClass)
+      });
     }
 
-    const pendingCustomerMessages = [];
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === "customer") {
-        pendingCustomerMessages.unshift(messages[index].text);
-        continue;
-      }
-      if (pendingCustomerMessages.length) {
-        break;
+    return conversations;
+  }
+
+  async extractSelectedConversation(liveConfig, account, conversations) {
+    const userId = extractUserIdFromChatUrl(this.page.url());
+    if (!userId) {
+      return null;
+    }
+
+    const messageRows = this.page.locator(liveConfig.messageRows);
+    const rowCount = await messageRows.count();
+    if (!rowCount) {
+      return null;
+    }
+
+    const nextData = await this.readNextData();
+    const listItem =
+      conversations.find((conversation) => conversation.userId === userId) ?? null;
+    const partnerCode = this.getPartnerCode(account);
+    const messages = [];
+
+    for (let index = 0; index < rowCount; index += 1) {
+      const message = await this.extractMessage(messageRows.nth(index), liveConfig);
+      if (message) {
+        messages.push(message);
       }
     }
 
-    const purchaseHistory = [];
-    if (selectors.purchaseItemRows && selectors.purchaseItemName) {
-      const orderRows = this.page.locator(selectors.purchaseItemRows);
-      const orderCount = await orderRows.count();
+    const productNames = deriveProductNamesFromMessages(messages);
+    const customerName =
+      normalizeSnippet(nextData?.props?.pageProps?.chatInfo?.info?.name) ||
+      normalizeSnippet(await this.readOptionalText(this.page, liveConfig.customerName)) ||
+      listItem?.customerName ||
+      "고객";
 
-      for (let index = 0; index < orderCount; index += 1) {
-        const row = orderRows.nth(index);
-        const productName = await this.readOptionalText(row, selectors.purchaseItemName);
-        const status = await this.readOptionalText(row, selectors.purchaseItemStatus);
-        const orderDate = await this.readOptionalText(
-          row,
-          selectors.purchaseItemOrderDate
-        );
-        const orderNumber = await this.readOptionalText(
-          row,
-          selectors.purchaseItemOrderNumber
-        );
-
-        if (!productName && !status && !orderDate && !orderNumber) {
-          continue;
-        }
-
-        purchaseHistory.push({
-          주문날짜: orderDate,
-          주문번호: orderNumber,
-          상품목록: [
-            {
-              상품명: productName,
-              상태: status
-            }
-          ]
-        });
-      }
-    }
-
-    const productNames = purchaseHistory
-      .flatMap((order) => order.상품목록 ?? [])
-      .map((item) => normalizeSnippet(item.상품명))
-      .filter(Boolean);
-
-    if (!productNames.length && selectors.productTags) {
-      const tagNodes = this.page.locator(selectors.productTags);
-      const tagCount = await tagNodes.count();
-      for (let index = 0; index < tagCount; index += 1) {
-        const tagText = normalizeSnippet(await tagNodes.nth(index).textContent());
-        if (tagText) {
-          productNames.push(tagText);
-        }
-      }
-    }
+    const preview = normalizeSnippet(lastOf(messages)?.text ?? listItem?.preview ?? "");
+    const pendingCustomerText = buildPendingCustomerText(messages);
 
     return {
-      customerName: customerName || "고객",
+      id: createLiveConversationId(partnerCode, userId),
+      userId,
+      isLive: true,
+      customerName,
+      orderSummary: summarizeLiveOrder({
+        customerName,
+        timeLabel: listItem?.timeLabel
+      }),
+      latestOrderDate: listItem?.timeLabel ?? "",
+      preview,
+      productNames,
+      purchaseHistory: [],
       messages,
-      pendingCustomerText: pendingCustomerMessages.join(" "),
-      purchaseHistory,
-      productNames: [...new Set(productNames)]
+      awaitingReply: Boolean(pendingCustomerText),
+      pendingCustomerText,
+      unreadCount: listItem?.unreadCount ?? 0,
+      liveMeta: {
+        partnerCode,
+        timeLabel: listItem?.timeLabel ?? "",
+        tags:
+          nextData?.props?.pageProps?.chatInfo?.info?.tags?.map((tag) =>
+            normalizeSnippet(tag)
+          ) ?? []
+      }
     };
   }
 
-  async sendDraft(selectors, replyText) {
-    const input = this.page.locator(selectors.input).last();
-    await input.click();
-    await input.fill(replyText);
-    await this.page.locator(selectors.sendButton).click();
+  async extractMessage(row, liveConfig) {
+    const sender = normalizeSnippet(await row.getAttribute("data-sender"));
+    const role = sender === "user" ? "customer" : sender === "partner" ? "seller" : "";
+    if (!role) {
+      return null;
+    }
+
+    const texts = [];
+    const copyAreas = row.locator(liveConfig.messageCopyText);
+    const copyCount = await copyAreas.count().catch(() => 0);
+    for (let index = 0; index < copyCount; index += 1) {
+      const text = normalizeSnippet(await copyAreas.nth(index).textContent());
+      if (text) {
+        texts.push(text);
+      }
+    }
+
+    if (!texts.length) {
+      const compositeTexts = row.locator(liveConfig.messageCompositeText);
+      const compositeCount = await compositeTexts.count().catch(() => 0);
+      for (let index = 0; index < compositeCount; index += 1) {
+        const text = normalizeSnippet(await compositeTexts.nth(index).textContent());
+        if (text) {
+          texts.push(text);
+        }
+      }
+    }
+
+    if (!texts.length) {
+      const fallback = normalizeSnippet(await this.readOptionalText(row, liveConfig.messageText));
+      if (fallback) {
+        texts.push(fallback);
+      }
+    }
+
+    const text = normalizeSnippet(texts.join("\n"));
+    if (!text) {
+      return null;
+    }
+
+    return {
+      role,
+      text
+    };
+  }
+
+  async readNextData() {
+    try {
+      const raw = await this.page.locator("#__NEXT_DATA__").textContent({
+        timeout: 1000
+      });
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
   }
 
   async readOptionalText(scope, selector) {
@@ -348,6 +591,22 @@ export class TalkTalkWorker {
     try {
       return normalizeSnippet(
         await scope.locator(selector).first().textContent({ timeout: 800 })
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  async readOptionalAttribute(scope, selector, attributeName) {
+    if (!selector) {
+      return "";
+    }
+
+    try {
+      return normalizeSnippet(
+        await scope.locator(selector).first().getAttribute(attributeName, {
+          timeout: 800
+        })
       );
     } catch {
       return "";

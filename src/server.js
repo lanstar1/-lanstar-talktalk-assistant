@@ -103,6 +103,7 @@ function bootstrapPayload() {
     llmStatus: engine.getLlmStatus(),
     productCatalog: productCatalog.getStats(),
     automation: worker.getStatus(),
+    live: worker.getLiveOverview(),
     conversations: store.getConversationSummaries()
   };
 }
@@ -210,6 +211,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/live/overview") {
+      sendJson(response, 200, { ok: true, live: worker.getLiveOverview() });
+      return;
+    }
+
     if (pathname.startsWith("/api/admin/")) {
       const uploadToken = getAdminUploadToken();
       if (!uploadToken) {
@@ -267,6 +273,15 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && pathname === "/api/automation/manual-send") {
+      if (settings.monitorOnly !== false) {
+        sendError(
+          response,
+          403,
+          "테스트 모드에서는 고객에게 실제 답변을 전송할 수 없습니다."
+        );
+        return;
+      }
+
       const body = await parseBody(request);
       const replyText = String(body.replyText ?? "").trim();
       if (!replyText) {
@@ -276,6 +291,19 @@ const server = http.createServer(async (request, response) => {
 
       const automation = await worker.sendManualDraft(replyText);
       sendJson(response, 200, { ok: true, automation });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/live/select") {
+      const body = await parseBody(request);
+      const conversationId = String(body.conversationId ?? "").trim();
+      if (!conversationId) {
+        sendError(response, 400, "선택할 실시간 대화 ID가 비어 있습니다.");
+        return;
+      }
+
+      const live = await worker.selectLiveConversation(conversationId);
+      sendJson(response, 200, { ok: true, live });
       return;
     }
 
