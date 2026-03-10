@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { TalkTalkWorker } from "./automation/talktalk-worker.js";
 import { loadKnowledgeBase } from "./lib/data-store.js";
 import { LlmClient } from "./lib/llm-client.js";
+import { loadProductCatalog } from "./lib/product-catalog.js";
 import { ReplyEngine } from "./lib/reply-engine.js";
 import { getActiveAccount, loadSettings, saveSettings } from "./lib/settings.js";
 import {
@@ -20,12 +21,14 @@ const rootDir = path.resolve(__dirname, "..");
 const publicDir = path.join(rootDir, "public");
 
 const store = await loadKnowledgeBase(rootDir);
+const productCatalog = await loadProductCatalog(rootDir);
 let settings = await loadSettings(rootDir);
 const llmClient = new LlmClient();
 const engine = new ReplyEngine({
   examples: store.retrievalExamples,
   policies: store.policies,
   llmClient,
+  productCatalog,
   getSettings: () => settings
 });
 const worker = new TalkTalkWorker({
@@ -98,6 +101,7 @@ function bootstrapPayload() {
     settings,
     activeAccount: getActiveAccount(settings),
     llmStatus: engine.getLlmStatus(),
+    productCatalog: productCatalog.getStats(),
     automation: worker.getStatus(),
     conversations: store.getConversationSummaries()
   };

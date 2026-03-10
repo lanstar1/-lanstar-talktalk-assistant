@@ -109,8 +109,86 @@ function detectProductContext(productNames = []) {
         normalized.includes("displayport") ||
         normalized.includes("dp")) &&
       !normalized.includes("displaylink") &&
-      !normalized.includes("usb3.0")
+      !normalized.includes("usb3.0"),
+    hasHdmiOutput:
+      normalized.includes("hdmi") ||
+      normalized.includes("모니터") ||
+      normalized.includes("tv"),
+    hasDualOutput:
+      normalized.includes("dual hdmi") ||
+      normalized.includes("2 port") ||
+      normalized.includes("2.0 dual port")
   };
+}
+
+function enrichProductContext(baseContext, productProfile = null) {
+  if (!productProfile) {
+    return baseContext;
+  }
+
+  const normalizedProfile = normalizeText(
+    [
+      productProfile.model,
+      productProfile.category,
+      productProfile.formFactor,
+      productProfile.usage,
+      productProfile.specsText
+    ].join(" ")
+  );
+
+  return {
+    ...baseContext,
+    requiresDriver:
+      baseContext.requiresDriver ||
+      ((normalizedProfile.includes("usb 3.0") ||
+        normalizedProfile.includes("usb3.0")) &&
+        normalizedProfile.includes("hdmi")),
+    requiresAltMode:
+      baseContext.requiresAltMode ||
+      ((normalizedProfile.includes("type-c") ||
+        normalizedProfile.includes("usb type-c") ||
+        normalizedProfile.includes("usb c") ||
+        normalizedProfile.includes("c타입")) &&
+        (normalizedProfile.includes("hdmi") ||
+          normalizedProfile.includes("displayport") ||
+          normalizedProfile.includes("dp"))),
+    hasHdmiOutput:
+      baseContext.hasHdmiOutput || normalizedProfile.includes("hdmi"),
+    hasDualOutput:
+      baseContext.hasDualOutput ||
+      normalizedProfile.includes("dual hdmi") ||
+      normalizedProfile.includes("2.0 dual port")
+  };
+}
+
+function buildProductProfileEvidence(productProfile) {
+  if (!productProfile) {
+    return null;
+  }
+
+  return {
+    id: `product:${productProfile.model}`,
+    source: "제품 스펙",
+    productName: productProfile.model,
+    score: productProfile.matchType === "family" ? 0.84 : 1,
+    customerText:
+      productProfile.matchType === "family"
+        ? "동일 계열 제품 스펙"
+        : "제품 모델 스펙",
+    answerText: snippet(productProfile.summary, 120)
+  };
+}
+
+function productProfileReference(productProfile, productNames = []) {
+  if (!productProfile) {
+    return productNames[0] ?? "해당 모델";
+  }
+
+  if (productProfile.matchType === "family") {
+    return `${productNames[0] ?? "현재 문의 모델"}과 동일 계열인 ${productProfile.model}`;
+  }
+
+  return productProfile.model;
 }
 
 function collectActionHints(matches = []) {
@@ -174,9 +252,11 @@ function buildTechnicalRetrievalReply({
   productNames,
   supportSignals,
   productContext,
-  actionHints
+  actionHints,
+  productProfile
 }) {
   let opening = "문의주신 증상으로 보아 우선 연결 상태와 설치 상태를 먼저 점검해 보시는 것이 좋습니다.";
+  const modelReference = productProfileReference(productProfile, productNames);
   if (
     includesSignal(supportSignals, ["display_no_signal"]) &&
     includesSignal(supportSignals, ["recognition"])
@@ -188,6 +268,12 @@ function buildTechnicalRetrievalReply({
     opening = "제품 연결 후 장치 인식이 원활하지 않은 증상으로 확인됩니다.";
   } else if (includesSignal(supportSignals, ["driver"])) {
     opening = "설치 또는 드라이버 관련 증상으로 확인됩니다.";
+  }
+
+  if (productProfile?.category || productProfile?.usage) {
+    opening = `${modelReference} 제품은 ${
+      productProfile.category || productProfile.usage
+    } 계열로 확인되며, ${opening.replace(/\.$/, "")}.`;
   }
 
   const steps = [];
@@ -203,13 +289,25 @@ function buildTechnicalRetrievalReply({
 
   if (productContext.requiresDriver || actionHints.includes("driver")) {
     pushStep(
-      `${productNames[0] ?? "해당 모델"}은 드라이버 설치 또는 재설치 여부가 중요하니 설치 상태와 설치 후 재부팅 여부를 함께 확인 부탁드립니다.`
+      `${modelReference} 모델은 드라이버 설치 또는 재설치 여부가 중요하니 설치 상태와 설치 후 재부팅 여부를 함께 확인 부탁드립니다.`
     );
   }
 
   if (productContext.requiresAltMode || actionHints.includes("alt_mode")) {
     pushStep(
       "사용 중인 노트북이나 기기의 C타입 포트가 영상 출력(Display Alt Mode)을 지원하는 포트인지 확인 부탁드립니다."
+    );
+  }
+
+  if (productContext.hasHdmiOutput && includesSignal(supportSignals, ["display_no_signal"])) {
+    pushStep(
+      "모니터 입력 소스가 현재 연결하신 HDMI 포트로 선택되어 있는지와 HDMI 케이블 체결 상태도 함께 확인 부탁드립니다."
+    );
+  }
+
+  if (productContext.hasDualOutput) {
+    pushStep(
+      "출력 포트가 2개 이상인 모델은 사용 중인 출력 포트를 바꿔도 동일한 증상인지 교차 확인 부탁드립니다."
     );
   }
 
@@ -244,10 +342,17 @@ function buildTechnicalRetrievalReply({
 }
 
 export class ReplyEngine {
-  constructor({ examples, policies, llmClient = null, getSettings = null }) {
+  constructor({
+    examples,
+    policies,
+    llmClient = null,
+    productCatalog = null,
+    getSettings = null
+  }) {
     this.examples = examples;
     this.policies = policies;
     this.llmClient = llmClient;
+    this.productCatalog = productCatalog;
     this.getSettings = getSettings;
   }
 
@@ -508,7 +613,18 @@ export class ReplyEngine {
     return null;
   }
 
-  buildFallback({ productNames }) {
+  buildFallback({ productNames, productProfile = null }) {
+    if (productProfile) {
+      const categoryText = productProfile.category
+        ? ` (${productProfile.category})`
+        : "";
+      const reference = productProfileReference(productProfile, productNames);
+      return [
+        `${reference}${categoryText} 관련 문의로 확인됩니다.`,
+        "현재 증상과 사용 환경을 조금 더 자세히 알려주시면 제품 특성과 기존 상담 이력을 함께 확인해 안내드리겠습니다."
+      ].join("\n");
+    }
+
     if (productNames.length) {
       return [
         `${productNames[0]} 관련 문의로 확인됩니다.`,
@@ -593,10 +709,20 @@ export class ReplyEngine {
       ...inputProductNames.map((name) => normalizeWhitespace(name))
     ]);
     const supportSignals = extractSupportSignals(customerText, productNames);
-    const productContext = detectProductContext(productNames);
     const modelIdentifiers = extractModelIdentifiers(
       productNames,
       conversationMessages.map((message) => message.text)
+    );
+    const productProfile = this.productCatalog?.findBestMatch({
+      modelIdentifiers,
+      rawHints: [
+        ...productNames,
+        ...conversationMessages.map((message) => message.text)
+      ]
+    });
+    const productContext = enrichProductContext(
+      detectProductContext(productNames),
+      productProfile
     );
     const flags = this.detectFlags(customerText);
     const policyMatch = this.matchPolicy({ customerText, purchaseHistory });
@@ -646,7 +772,8 @@ export class ReplyEngine {
         productNames,
         supportSignals,
         productContext,
-        actionHints
+        actionHints,
+        productProfile
       });
       evidence = matches.map(buildEvidenceFromMatch);
       confidence = Math.min(0.9, 0.5 + matches[0].score);
@@ -657,10 +784,17 @@ export class ReplyEngine {
       confidence = Math.min(0.92, 0.45 + matches[0].score);
       generationSource = "retrieval";
     } else {
-      body = this.buildFallback({ productNames });
+      body = this.buildFallback({ productNames, productProfile });
       evidence = [];
       confidence = 0.36;
       generationSource = "fallback";
+    }
+
+    if (!policyMatch) {
+      const productEvidence = buildProductProfileEvidence(productProfile);
+      if (productEvidence) {
+        evidence = [...evidence, productEvidence];
+      }
     }
 
     const replyText = maybeAddGreetingAndClosing(body, this.policies);
@@ -678,6 +812,7 @@ export class ReplyEngine {
         productNames,
         supportSignals,
         modelIdentifiers,
+        productProfile,
         replyText,
         evidence,
         flags,
@@ -701,6 +836,7 @@ export class ReplyEngine {
         productNames,
         supportSignals,
         modelIdentifiers,
+        productProfile,
         flags,
         policyMatch,
         productContext,
@@ -800,6 +936,18 @@ export class ReplyEngine {
       messages: context.messages,
       purchaseSummary: summarizePurchaseHistory(payload.purchaseHistory ?? []),
       baseReplyText: suggestion.replyText,
+      productProfile: context.productProfile
+        ? {
+            model: context.productProfile.model,
+            matchType: context.productProfile.matchType,
+            category: context.productProfile.category,
+            formFactor: context.productProfile.formFactor,
+            material: context.productProfile.material,
+            usage: context.productProfile.usage,
+            specs: context.productProfile.specs,
+            summary: context.productProfile.summary
+          }
+        : null,
       enhancementReason,
       flags: suggestion.flags,
       evidence: suggestion.evidence.slice(0, llmSettings.maxEvidenceCount)

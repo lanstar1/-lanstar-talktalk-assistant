@@ -62,6 +62,18 @@ function buildPromptPayload(context) {
     productNames: context.productNames,
     supportSignals: context.supportSignals ?? [],
     detectedModelIdentifiers: context.modelIdentifiers ?? [],
+    productProfile: context.productProfile
+      ? {
+          model: context.productProfile.model,
+          matchType: context.productProfile.matchType,
+          category: context.productProfile.category,
+          formFactor: context.productProfile.formFactor,
+          material: context.productProfile.material,
+          usage: context.productProfile.usage,
+          specs: context.productProfile.specs,
+          summary: context.productProfile.summary
+        }
+      : null,
     recentMessages: context.messages.slice(-6),
     purchaseSummary: context.purchaseSummary,
     ruleBasedDraft: context.baseReplyText,
@@ -81,6 +93,7 @@ function buildPromptPayload(context) {
     hardRules: [
       "운영정책과 주문정보를 임의로 바꾸지 말 것",
       "근거 없는 제품 스펙을 추정하지 말 것",
+      "제품 스펙 JSON이 있으면 해당 내용을 우선 참고할 것",
       "정보가 부족하면 필요한 확인 항목을 먼저 요청할 것",
       "민감정보를 요구하거나 노출하지 말 것",
       "답변은 고객에게 바로 보낼 수 있는 한국어 존댓말로 작성할 것"

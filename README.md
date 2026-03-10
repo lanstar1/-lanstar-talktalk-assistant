@@ -37,6 +37,17 @@ OPENAI_API_KEY=your_api_key npm run dev
 - `LLM_TIMEOUT_MS=25000`
 - `LLM_TEMPERATURE=0.2`
 - `LLM_MAX_TOKENS=700`
+- `PRODUCT_ANALYSIS_PATH` (기본값: `data/product_analysis.json`)
+
+## 제품 모델 카탈로그
+
+모델별 특징 JSON은 [data/product_analysis.json](/Users/lanstar/Documents/New project/data/product_analysis.json) 에 포함되어 있습니다. 답변 엔진은 아래 순서로 사용합니다.
+
+1. 주문내역, 상품명, 대화에서 모델명 추출
+2. 제품 카탈로그에서 `exact -> variant -> family` 순으로 모델 매칭
+3. 동일 모델 상담/Q&A 검색
+4. 검색 근거와 제품 스펙을 함께 사용해 초안 생성
+5. 기존 이력이 부족하면 LLM에 제품 스펙 JSON까지 함께 전달해 보강
 
 ## Render 배포
 
